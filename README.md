@@ -32,9 +32,12 @@ PS C:\Projects\gowork> work awe
      代码是写给人看的，顺便让机器运行。
 ```
 
-需要 Windows 与 PowerShell 7；从源码构建需要 Go。
+支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7，macOS / Linux 用 bash 或 zsh；
+从源码构建需要 Go 1.26.5 或更新。
 
 ## 安装
+
+### Windows（PowerShell 7）
 
 ```powershell
 # 0. 克隆
@@ -55,17 +58,42 @@ go build -o bin\gowork.exe .
 work
 ```
 
+### macOS / Linux（bash、zsh）
+
+```sh
+# 0. 克隆
+git clone https://github.com/CosmicHz/gowork.git
+cd gowork
+
+# 1. 构建（产物是 bin/gowork，没有 .exe 后缀）
+go build -o bin/gowork .
+
+# 2. 把可执行文件放进 PATH（下面假设 ~/.local/bin 已在你 PATH 里）
+install -m 755 bin/gowork ~/.local/bin/gowork
+
+# 3. 装 shell 入口：必须是函数才能改当前会话的目录，所以是 source 而不是执行
+echo ". $PWD/bin/work.sh" >> ~/.zshrc   # bash 用户写 ~/.bashrc；fish 用户改成 source bin/work.fish
+
+# 4. 配置工作区（三选一，见下节）
+echo 'export GOWORK_WORKSPACE="$HOME/Projects"' >> ~/.zshrc
+
+# 5. 开始使用！（重启终端后）
+work
+```
+
+不想动 PATH 的话，也可以设 `GOWORK_BIN=/path/to/gowork` 直接指向可执行文件。
+
 ## 配置工作区
 
 gowork 不知道该去哪里找你的项目，按下面的优先级解析：
 
 | 优先级 | 方式 |
 | --- | --- |
-| 1 | `work -Workspace <路径>`（临时指定，每次都要给） |
+| 1 | `work -Workspace <路径>`（PowerShell）/ `work --workspace <路径>`（bash、zsh），临时指定 |
 | 2 | 环境变量 `GOWORK_WORKSPACE` |
-| 3 | 配置文件 `%LOCALAPPDATA%\gowork\config.json` |
+| 3 | 配置文件：Windows `%LOCALAPPDATA%\gowork\config.json`、macOS `~/Library/Caches/gowork/config.json`、Linux/WSL `~/.cache/gowork/config.json` |
 
-三者都没有时会报错并提示怎么配置。
+三者都没有时会报错，并按当前平台给出对应写法。
 
 ```powershell
 # 环境变量（用户级，持久）
@@ -75,6 +103,15 @@ gowork 不知道该去哪里找你的项目，按下面的优先级解析：
 $dir = "$env:LOCALAPPDATA\gowork"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 '{ "workspace": "C:\\Projects" }' | Set-Content "$dir\config.json" -Encoding utf8
+```
+
+```sh
+# 环境变量（写进 ~/.zshrc 或 ~/.bashrc 才持久）
+export GOWORK_WORKSPACE="$HOME/Projects"
+
+# 或者配置文件
+mkdir -p ~/.cache/gowork
+printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 ```
 
 ## 用法
@@ -91,6 +128,9 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 | `work <仓库地址>` | 克隆到工作区并进入 |
 | `work my-app -IndentSize 5` | 左侧缩进改为 5（默认 3，最小 3） |
 | `work my-app -Workspace D:\code` | 本次改用它作为工作区 |
+
+> 选项拼写随启动器而变：PowerShell 启动器把参数翻译成 gowork 的选项，所以写 `-IndentSize` / `-Workspace`；
+> bash、zsh 的 `work` 把参数原样透传给 gowork，所以写 `--indent` / `--workspace`。
 
 ### 项目名匹配
 
@@ -170,21 +210,27 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（并写入目标目录，shell 侧据此 `Set-Location`） |
+| 0 | 成功（并写入目标目录，启动器据此 `Set-Location` / `cd`） |
 | 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名 |
 | 2 | 参数错误（仅直接调 exe 时可达，例如 `--indent` 小于 3） |
 
 失败时统一**不切换目录**，错误以红字写到 stderr。解析阶段的失败不清屏（保留现场），
 克隆失败时屏幕已清（因为要显示克隆过程）。
 
-### 直接调用 exe
+### 直接调用可执行文件
 
-`gowork.exe` 可以单独跑，只是不会切换目录，调试时有用：
+`gowork`（Windows 上是 `gowork.exe`）可以单独跑，只是不会切换目录，调试时有用：
 
 ```powershell
 gowork.exe --workspace C:\Projects --project my-app --no-color
 ```
 
+```sh
+./bin/gowork --workspace ~/Projects --project my-app --no-color
+```
+
+`-N` 索引三种入口都认：裸写的 `-N` 会先被改写成 `--project=-N`，所以 `gowork -1` 直接跑也行
+（否则 Go 的 flag 包会把它当未知选项）。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件——启动器就是靠它回传的。
 
@@ -198,26 +244,54 @@ gowork.exe --workspace C:\Projects --project my-app --no-color
 | `render.go` | 仪表盘渲染、ANSI 配色、按显示宽度对齐 |
 | `holiday.go` | 节假日查询与磁盘缓存 |
 | `clone.go` | 仓库地址识别、克隆 |
-| `sysinfo.go` | 控制台 VT/UTF-8、终端宽度、磁盘可用空间、错误输出 |
-| `bin/work.ps1` | shell 入口：读取目标目录并 `Set-Location` |
+| `sysinfo.go` | 跨平台部分：终端宽度、错误输出 |
+| `sysinfo_windows.go` | Windows：控制台 VT/UTF-8 模式、卷可用空间 |
+| `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；VT 无需开启 |
+| `bin/work.ps1` | PowerShell 入口：读取目标目录并 `Set-Location` |
+| `bin/work.sh` | bash / zsh 入口：source 后在当前会话 `cd` |
+| `bin/work.fish` | fish 入口，同上 |
 
-## 为什么需要一个 PowerShell 启动器
+## 开发
 
-子进程改不了父 shell 的工作目录，所以 `gowork.exe` 把目标目录写进 `--cwd-file` 指定的临时文件，
-由 `work.ps1` 读取后执行 `Set-Location`。这个启动器是架构上无法省略的一步，但它足够薄：
-不含任何业务逻辑，删掉它工具本身依然能独立运行（只是不会切目录）。
+```sh
+gofmt -l .      # 应为空
+go vet ./...    # 静态检查
+go test ./...   # 单元测试（macOS / Linux 上可直接跑）
 
-启动器用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。这样做有两点原因：
-一是绕开 PowerShell 的输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
-二是它的输出直接落在主机上，不进管道，所以 `$x = work` 捕获不到仪表盘。
+# 交叉编译
+GOOS=windows GOARCH=amd64 go build -o bin/gowork.exe .
+GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
+```
+
+平台相关的只有 `enableVT` 与 `diskFreeGB` 两个函数，用构建标签隔开；其余逻辑与平台无关，
+所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-N` 索引、宽度截断、
+节假日文案等纯逻辑，不必等到 Windows 上才能验。
+
+## 为什么需要一个 shell 启动器
+
+子进程改不了父 shell 的工作目录，所以 gowork 把目标目录写进 `--cwd-file` 指定的临时文件，
+由启动器读取后切换目录。启动器是架构上无法省略的一步，但它足够薄：不含任何业务逻辑，
+删掉它工具本身依然能独立运行（只是不会切目录）。
+
+三个平台各一份，做的事完全一样：
+
+- `bin/work.ps1`：用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。
+  这样绕开了 PowerShell 的输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
+  输出直接落在主机上、不进管道，所以 `$x = work` 捕获不到仪表盘。
+- `bin/work.sh`（bash / zsh）与 `bin/work.fish`：写成**函数**而不是脚本——脚本是子进程，
+  照样改不了父 shell 的目录。gowork 是直接调用的（不接管道、不做命令替换），
+  它的 stdout 才是真终端，清屏、窗口标题和颜色才会生效。
 
 ## 已知问题
 
-- **平台**：仅 Windows（依赖 `golang.org/x/sys/windows` 读取磁盘空间与控制台模式）。
+- **平台**：Windows、macOS、Linux（含 WSL）。平台相关的只有两个函数，用构建标签分开：
+  `sysinfo_windows.go` 读控制台模式与卷空间，`sysinfo_posix.go` 用 `statfs` 取文件系统可用空间。
+- **POSIX 清屏**：清屏会附带 `\x1b[3J` 清回滚缓冲，少数老终端不认这一条，忽略即可，不影响布局。
 - **字符宽度**：`render.go` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的
   真实 Unicode 类别判断，宽字符区段手工列举，歧义宽度一律按 1 列——它本就取决于终端配置。
   只服务行标签补白与「最近活跃」名字列两处对齐。
 - **节假日数据源**：`date.appworlds.cn`。接口语义是「严格晚于给定日期」的下一个放假日，因此用昨天
   去查，否则正好放假那天会算成「还有 1 天」。数据取得失败时只显示「数据获取失败」，不缓存以便重试。
   新一年的排期通常在 11—12 月公布，在那之前跨年的查询会返回空。
-- **缓存**：`%LOCALAPPDATA%\gowork\holiday-cache.json`，缓存的节日日期还没过去就复用。
+- **缓存**：用户缓存目录下的 `gowork/holiday-cache.json`（Windows 是 `%LOCALAPPDATA%\gowork\`，
+  macOS 是 `~/Library/Caches/gowork/`，Linux/WSL 是 `~/.cache/gowork/`），缓存的节日日期还没过去就复用。
