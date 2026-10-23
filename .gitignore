@@ -1,2 +1,3 @@
 # 构建产物
 *.exe
+/bin/gowork

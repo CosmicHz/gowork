@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // workspaceEnv 覆盖工作区的环境变量名。
@@ -32,10 +33,27 @@ func resolveWorkspace(flagValue string) (string, error) {
 		return "", err
 	}
 	return "", fmt.Errorf(`未配置工作区，任选一种方式：
-  · 环境变量：$env:%s = '<工作区路径>'
+  · 环境变量：%s
   · 配置文件：%s
       { "workspace": "<工作区路径>" }
-  · 临时指定：work -Workspace <工作区路径>`, workspaceEnv, path)
+  · 临时指定：%s`, envHint(), path, tempFlagHint())
+}
+
+// envHint 返回设置工作区环境变量的当前平台写法。
+func envHint() string {
+	if runtime.GOOS == "windows" {
+		return "$env:" + workspaceEnv + " = '<工作区路径>'"
+	}
+	return "export " + workspaceEnv + "='<工作区路径>'"
+}
+
+// tempFlagHint 返回临时指定工作区的写法：PowerShell 启动器暴露 -Workspace，
+// POSIX 下的工作流直接把参数透传给 gowork，所以用它的 --workspace。
+func tempFlagHint() string {
+	if runtime.GOOS == "windows" {
+		return "work -Workspace <工作区路径>"
+	}
+	return "work --workspace <工作区路径>"
 }
 
 func readWorkspaceConfig() (string, bool) {
@@ -55,7 +73,8 @@ func readWorkspaceConfig() (string, bool) {
 	return c.Workspace, true
 }
 
-// appDir 返回 %LOCALAPPDATA%\gowork，配置与缓存共用。
+// appDir 返回用户缓存目录下的 gowork（Windows 是 %LOCALAPPDATA%\gowork，
+// macOS 是 ~/Library/Caches/gowork，Linux/WSL 是 ~/.cache/gowork），配置与缓存共用。
 func appDir() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
