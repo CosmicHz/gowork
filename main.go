@@ -1,10 +1,10 @@
 // Command gowork —— 项目跳板 + 环境仪表盘。
 //
-// gowork.exe 负责目标目录解析、仪表盘渲染与仓库克隆等全部逻辑；
-// bin\work.ps1 是 shell 入口，只做一件事：在当前会话里执行 Set-Location。
+// gowork 负责目标目录解析、仪表盘渲染与仓库克隆等全部逻辑，跨 Windows / macOS / Linux；
+// bin/ 下的三个启动器（work.ps1、work.sh、work.fish）只做一件事：在当前会话里切换目录。
 //
-// 为什么需要那个启动器：子进程改不了父 shell 的工作目录，所以目标目录由 --cwd-file
-// 回传给 shell 侧，由它执行切换。exe 也能单独跑，只是不会切换目录。
+// 为什么需要启动器：子进程改不了父 shell 的工作目录，所以目标目录由 --cwd-file
+// 回传给 shell 侧，由它执行切换。可执行文件也能单独跑，只是不会切换目录。
 package main
 
 import (

@@ -32,7 +32,8 @@ PS C:\Projects\gowork> work awe
      代码是写给人看的，顺便让机器运行。
 ```
 
-支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7，macOS / Linux 用 bash 或 zsh；
+支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7；
+macOS / Linux 提供两个启动器：`bin/work.sh`（bash / zsh / POSIX sh）与 `bin/work.fish`。
 从源码构建需要 Go 1.26.5 或更新。
 
 ## 安装
@@ -58,7 +59,7 @@ go build -o bin\gowork.exe .
 work
 ```
 
-### macOS / Linux（bash、zsh）
+### macOS / Linux
 
 ```sh
 # 0. 克隆
@@ -89,7 +90,7 @@ gowork 不知道该去哪里找你的项目，按下面的优先级解析：
 
 | 优先级 | 方式 |
 | --- | --- |
-| 1 | `work -Workspace <路径>`（PowerShell）/ `work --workspace <路径>`（bash、zsh），临时指定 |
+| 1 | 临时指定：`work -Workspace <路径>`（Windows）/ `work --workspace <路径>`（macOS / Linux） |
 | 2 | 环境变量 `GOWORK_WORKSPACE` |
 | 3 | 配置文件：Windows `%LOCALAPPDATA%\gowork\config.json`、macOS `~/Library/Caches/gowork/config.json`、Linux/WSL `~/.cache/gowork/config.json` |
 
@@ -129,8 +130,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `work my-app -IndentSize 5` | 左侧缩进改为 5（默认 3，最小 3） |
 | `work my-app -Workspace D:\code` | 本次改用它作为工作区 |
 
-> 选项拼写随启动器而变：PowerShell 启动器把参数翻译成 gowork 的选项，所以写 `-IndentSize` / `-Workspace`；
-> bash、zsh 的 `work` 把参数原样透传给 gowork，所以写 `--indent` / `--workspace`。
+> 选项拼写随平台而变：Windows 上写 `-IndentSize` / `-Workspace`；
+> macOS / Linux 的启动器把参数原样透传给 gowork，所以写 `--indent` / `--workspace`。
 
 ### 项目名匹配
 
@@ -161,6 +162,9 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 ### `-N` 索引
 
 `-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报 `项目索引超出范围，有效范围: 1-<总数>` 。
+
+工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
+要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
 
 ### 仓库地址
 
@@ -212,24 +216,25 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | --- | --- |
 | 0 | 成功（并写入目标目录，启动器据此 `Set-Location` / `cd`） |
 | 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名 |
-| 2 | 参数错误（仅直接调 exe 时可达，例如 `--indent` 小于 3） |
+| 2 | 参数错误，例如 `--indent` 小于 3。三个入口一致：PowerShell 的 `-IndentSize` 只负责整数类型转换，范围由 gowork 判定 |
 
 失败时统一**不切换目录**，错误以红字写到 stderr。解析阶段的失败不清屏（保留现场），
 克隆失败时屏幕已清（因为要显示克隆过程）。
 
 ### 直接调用可执行文件
 
-`gowork`（Windows 上是 `gowork.exe`）可以单独跑，只是不会切换目录，调试时有用：
+构建出来的可执行文件（Windows 是 `bin\gowork.exe`，macOS / Linux 是 `bin/gowork`）可以单独跑，
+只是不会切换目录，调试时有用：
 
 ```powershell
-gowork.exe --workspace C:\Projects --project my-app --no-color
+.\bin\gowork.exe --workspace C:\Projects --project my-app --no-color
 ```
 
 ```sh
 ./bin/gowork --workspace ~/Projects --project my-app --no-color
 ```
 
-`-N` 索引三种入口都认：裸写的 `-N` 会先被改写成 `--project=-N`，所以 `gowork -1` 直接跑也行
+`-N` 索引三种入口都认：裸写的 `-N` 会先被改写成 `--project=-N`，所以直接跑 `-1` 也行
 （否则 Go 的 flag 包会把它当未知选项）。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件——启动器就是靠它回传的。
@@ -248,7 +253,7 @@ gowork.exe --workspace C:\Projects --project my-app --no-color
 | `sysinfo_windows.go` | Windows：控制台 VT/UTF-8 模式、卷可用空间 |
 | `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；VT 无需开启 |
 | `bin/work.ps1` | PowerShell 入口：读取目标目录并 `Set-Location` |
-| `bin/work.sh` | bash / zsh 入口：source 后在当前会话 `cd` |
+| `bin/work.sh` | POSIX sh 入口：source 后在当前会话 `cd` |
 | `bin/work.fish` | fish 入口，同上 |
 
 ## 开发
@@ -278,7 +283,7 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
 - `bin/work.ps1`：用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。
   这样绕开了 PowerShell 的输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
   输出直接落在主机上、不进管道，所以 `$x = work` 捕获不到仪表盘。
-- `bin/work.sh`（bash / zsh）与 `bin/work.fish`：写成**函数**而不是脚本——脚本是子进程，
+- `bin/work.sh` 与 `bin/work.fish`：写成**函数**而不是脚本——脚本是子进程，
   照样改不了父 shell 的目录。gowork 是直接调用的（不接管道、不做命令替换），
   它的 stdout 才是真终端，清屏、窗口标题和颜色才会生效。
 
