@@ -26,6 +26,11 @@ func main() {
 	// 整个程序直写控制台，先打开 ANSI 解析与 UTF-8 代码页。
 	enableVT()
 
+	// `-N` 是本工具的项目索引写法（-1 = 最近修改的第一个），但 Go 的 flag 包会把
+	// 裸写的 -1 当成未知选项而报参数错误。先把它改写成 --project=-N，这样 PowerShell
+	// 启动器、POSIX 启动器和直接调 exe 三种入口的行为就一致了。
+	os.Args = append([]string{os.Args[0]}, rewriteIndexArgs(os.Args[1:])...)
+
 	opts, err := parseFlags()
 	if err != nil {
 		fail(err, 2)
@@ -33,6 +38,34 @@ func main() {
 	if err := run(opts); err != nil {
 		fail(err, 1)
 	}
+}
+
+// valueFlags 是会用掉下一个参数的非布尔选项。改写 -N 时要跳过它们后面那个值，
+// 否则 `--project -1` 会被误当成裸写的索引而改坏。
+var valueFlags = map[string]bool{
+	"-project": true, "--project": true,
+	"-indent": true, "--indent": true,
+	"-cwd-file": true, "--cwd-file": true,
+	"-workspace": true, "--workspace": true,
+}
+
+// rewriteIndexArgs 把裸写的 -N 改写成 --project=-N，其余参数原样保留。
+func rewriteIndexArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if indexPattern.MatchString(arg) {
+			arg = "--project=" + arg
+		}
+		out = append(out, arg)
+
+		// `-flag value` 形式：值原样跟在后面，不能当位置参数改写。
+		if valueFlags[args[i]] && i+1 < len(args) {
+			i++
+			out = append(out, args[i])
+		}
+	}
+	return out
 }
 
 type options struct {
