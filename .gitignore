@@ -1,3 +1,6 @@
 # 构建产物
 *.exe
 /bin/gowork
+/bin/gowork-*
+# 在仓库根直接 go build . 的产物：POSIX 下没有后缀，名字就是模块名
+/gowork
