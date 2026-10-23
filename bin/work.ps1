@@ -24,7 +24,6 @@ param(
     [Parameter(Position = 0)]
     [string]$Project,
 
-    [ValidateRange(3, [int]::MaxValue)]
     [int]$IndentSize = 3,
 
     [string]$Workspace
@@ -33,6 +32,7 @@ param(
 $exe = Join-Path $PSScriptRoot 'gowork.exe'
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
     Write-Error "未找到 gowork.exe，请先构建：go build -o bin\gowork.exe ."
+    $global:LASTEXITCODE = 127
     return
 }
 
@@ -52,6 +52,8 @@ try {
     # 用 Start-Process 让 gowork.exe 直接接管当前控制台：子进程自己写屏，
     # 绕开 PowerShell 的输出管线，ANSI 颜色才不会被 $PSStyle.OutputRendering 抹掉。
     $proc = Start-Process -FilePath $exe -ArgumentList $argumentLine -NoNewWindow -Wait -PassThru
+
+    $global:LASTEXITCODE = $proc.ExitCode
 
     if ($proc.ExitCode -eq 0) {
         $target = Get-Content -LiteralPath $cwdFile -Raw -ErrorAction SilentlyContinue

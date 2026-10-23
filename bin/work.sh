@@ -1,5 +1,7 @@
 #!/bin/sh
-# work —— gowork 的 POSIX shell 入口（bash / zsh）。
+# work —— gowork 的 POSIX shell 入口（bash / zsh / dash）。
+#
+# 本文件是被 source 的，不是执行的；上面那行 shebang 只是给编辑器与静态检查的提示。
 #
 # 用法：在 ~/.bashrc 或 ~/.zshrc 里加一行，然后重开终端（或在当前会话 source）：
 #     . /path/to/gowork/bin/work.sh
@@ -30,7 +32,8 @@ work() {
     rc=$?
 
     if [ "$rc" -eq 0 ] && [ -s "$cwd_file" ]; then
-        builtin cd -- "$(cat "$cwd_file")" || rc=$?
+        # 反斜杠让命令名不被别名替换（POSIX 行为），否则用户若 alias 过 cd 就会跑偏；
+        \cd -- "$(cat "$cwd_file")" || rc=$?
     fi
 
     rm -f "$cwd_file"
