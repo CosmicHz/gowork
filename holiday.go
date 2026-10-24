@@ -55,8 +55,8 @@ type holidayEvent struct {
 	Type string `json:"type"`
 }
 
-// 整理过的节假日事件。
-// 每个事件是一条「日期 + 名称 + 类型」，后续运行据此重新挑选最近的节日。
+// 整理过的节日记录。
+// 每条记录是「日期 + 名称 + 类型」，后续运行据此重新挑选最近的节日。
 type holidayCache struct {
 	Version int                  `json:"version"`
 	Events  []cachedHolidayEvent `json:"events"`
@@ -68,8 +68,8 @@ type cachedHolidayEvent struct {
 	Type string `json:"type"` // rest（法定放假）或 festival（公历/农历节日）
 }
 
-// nextHoliday 返回下一个放假日或节日：优先用磁盘缓存里查到的全部日历数据，
-// 缓存里已经没有未来的节日时才请求接口。查询失败不写缓存，下次运行仍会重试。
+// nextHoliday 返回下一个放假日或节日：先从缓存里的节日记录中挑，全部过期后才请求接口。
+// 查询失败不写缓存，下次运行仍会重试。
 func nextHoliday(now time.Time) holiday {
 	if h, ok := readHolidayCache(now); ok {
 		return h
@@ -86,9 +86,11 @@ func nextHoliday(now time.Time) holiday {
 	return h
 }
 
-// fetchHoliday 按日视图查今天的万年历，一次请求拿回当天与之后的节日。
-// holiday_type 用 all：法定放假与公历/农历节日都在同一个响应里，省一次调用。
-// 不传 exclude_past：它按服务端的“今天”过滤，与传入的 date 无关。
+// fetchHoliday 按天查询今天的万年历和节日，一次请求拿回当天与前后两段节日。
+// 取到的节日包含公历、农历节日和节气。
+// API 接受一个 exclude_past 参数，文档写的是“过滤今天之前已经过去的节日”，
+// 但是我们不传，因为它所谓的“今天”是服务器时间，不是我们传的 date，传的话可能导致困惑，
+// 特此记录。
 func fetchHoliday(now time.Time) (holidayResponse, error) {
 	q := url.Values{}
 	q.Set("date", now.Format("2006-01-02"))
@@ -114,15 +116,15 @@ func fetchHoliday(now time.Time) (holidayResponse, error) {
 	return r, nil
 }
 
-// parseHoliday 从日视图结果里挑出今天或之后的节日。
-// 优先取法定放假日（legal_rest）并统计整段放假天数；法定排期还没公布时，
+// parseHoliday 从按天查询的结果里挑出今天或之后的节日。
+// 优先取法定节假日（legal_rest）并统计整段放假天数；法定排期还没公布时，
 // 退回最近的一个公历/农历节日，只是没有放假天数可报。节气不算节日。
 func parseHoliday(r holidayResponse, now time.Time) (holiday, error) {
 	rest, festivals := eventMaps(collectEvents(r))
 	return selectHoliday(rest, festivals, now)
 }
 
-// collectEvents 把日视图与 nearby（前后都要，放假天数要向前补齐）整理成去重的事件列表。
+// collectEvents 把取到的“节日列表”与“前后最近节日”（放假天数要向前补齐）整理成去重后的记录列表。
 func collectEvents(r holidayResponse) []cachedHolidayEvent {
 	seen := make(map[string]bool)
 	var events []cachedHolidayEvent
@@ -165,7 +167,7 @@ func collectEvents(r holidayResponse) []cachedHolidayEvent {
 	return events
 }
 
-// eventMaps 把事件列表拆成「日期 -> 名称」的两张表。
+// eventMaps 把记录列表拆成「日期 -> 名称」的两张表。
 func eventMaps(events []cachedHolidayEvent) (rest, festivals map[string]string) {
 	rest = make(map[string]string)
 	festivals = make(map[string]string)
@@ -251,7 +253,7 @@ func restRun(rest map[string]string, start time.Time) int {
 	}
 }
 
-// readHolidayCache 用缓存里整理好的事件重新挑选。缓存里还有未来的节日就复用，
+// readHolidayCache 用缓存里整理好的记录重新挑选。缓存里还有未来的节日就复用，
 // 全部过去之后（挑不出结果）才返回 false，让调用方重新请求。
 func readHolidayCache(now time.Time) (holiday, bool) {
 	path, err := holidayCachePath()
@@ -279,7 +281,7 @@ func readHolidayCache(now time.Time) (holiday, bool) {
 	return h, true
 }
 
-// writeHolidayCache 把接口返回整理成事件列表后落盘，不保留原始响应。
+// writeHolidayCache 把接口返回整理成记录列表后落盘，不保留原始响应。
 func writeHolidayCache(r holidayResponse) {
 	path, err := holidayCachePath()
 	if err != nil {

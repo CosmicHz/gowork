@@ -272,8 +272,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `holiday.go` | 节假日查询与磁盘缓存 |
 | `clone.go` | 仓库地址识别、克隆 |
 | `sysinfo.go` | 跨平台部分：终端宽度、错误输出 |
-| `sysinfo_windows.go` | Windows：控制台 VT/UTF-8 模式、卷可用空间 |
-| `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；VT 无需开启 |
+| `sysinfo_windows.go` | Windows：控制台的 ANSI 解析与 UTF-8 代码页、卷可用空间 |
+| `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；ANSI 解析无需额外开启 |
 | `bin/work.ps1` | PowerShell 入口：读取目标目录并 `Set-Location` |
 | `bin/work.sh` | POSIX sh 入口：source 后在当前会话 `cd` |
 | `bin/work.fish` | fish 入口，同上 |

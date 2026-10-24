@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// holidayFixture 构造一份日视图响应：today 为当天明细，next 为之后的节日分组。
-// previous 由需要它的用例自行补上。
+// holidayFixture 构造一份按天查询的结果：today 是当天记录，next 是之后的节日分组。
+// 需要前面几天的用例可以再补 previous。
 func holidayFixture(today holidayDay, next ...holidayGroup) holidayResponse {
 	var r holidayResponse
 	if today.Date != "" {
