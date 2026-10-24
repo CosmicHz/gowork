@@ -66,23 +66,28 @@ work
 git clone https://github.com/CosmicHz/gowork.git
 cd gowork
 
-# 1. 构建（产物是 bin/gowork，没有 .exe 后缀）
-go build -o bin/gowork .
+# 1. 直接构建到 PATH 上的目录
+mkdir -p ~/.local/bin
+go build -o ~/.local/bin/gowork .
 
-# 2. 把可执行文件放进 PATH（下面假设 ~/.local/bin 已在你 PATH 里）
-install -m 755 bin/gowork ~/.local/bin/gowork
+# 2. 把 PATH 与 shell 入口写进你的配置。下面以 zsh 为例，bash 换成 ~/.bashrc；
+#    两条都写绝对路径，$PWD 在这里展开成仓库的实际位置
+{ echo 'export PATH="$HOME/.local/bin:$PATH"'; echo ". '$PWD/bin/work.sh'"; } >> ~/.zshrc
 
-# 3. 装 shell 入口：必须是函数才能改当前会话的目录，所以是 source 而不是执行
-echo ". $PWD/bin/work.sh" >> ~/.zshrc   # bash 用户写 ~/.bashrc；fish 用户改成 source bin/work.fish
+# fish 用户改用：
+#   fish_add_path ~/.local/bin
+#   echo "source '$PWD/bin/work.fish'" >> ~/.config/fish/config.fish
 
-# 4. 配置工作区（三选一，见下节）
+# 3. 配置工作区（三选一，见下节）
 echo 'export GOWORK_WORKSPACE="$HOME/Projects"' >> ~/.zshrc
 
-# 5. 开始使用！（重启终端后）
+# 4. 重开终端后
 work
 ```
 
-不想动 PATH 的话，也可以设 `GOWORK_BIN=/path/to/gowork` 直接指向可执行文件。
+可执行文件的查找顺序是 `GOWORK_BIN` > 启动器的默认位置。默认位置：Windows 取
+`work.ps1` 同目录的 `gowork.exe`；macOS / Linux 从 PATH 找 `gowork`。不想放进 PATH
+时，把 `GOWORK_BIN` 设成可执行文件的绝对路径即可。
 
 ## 配置工作区
 
@@ -131,7 +136,7 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `work my-app -Workspace D:\code` | 本次改用它作为工作区 |
 
 > 选项拼写随平台而变：Windows 上写 `-IndentSize` / `-Workspace`；
-> macOS / Linux 的启动器把参数原样透传给 gowork，所以写 `--indent` / `--workspace`。
+> macOS / Linux 的启动器把参数原样透传给 gowork，写 `--indent` / `--workspace`。
 
 ### 项目名匹配
 
@@ -161,16 +166,27 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 ### `-N` 索引
 
-`-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报 `项目索引超出范围，有效范围: 1-<总数>` 。
+`-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报错并提示有效范围。
 
-工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
-要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
+> [!NOTE]
+>
+> 工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
+> 要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
 
 ### 仓库地址
 
-只认两种形式：带协议的 URL（`http` `https` `ssh` `git` `ftp` `ftps`）与 scp 形式
-（`git@host:owner/repo.git`）。裸写 `github.com/foo/bar` **不认**——它会被当成项目名去匹配，
-然后报「目录不存在」。这是刻意的，不猜，避免误判。
+判定范围与 git 自己一致：
+
+- **带协议**：`http` `https` `ssh` `git` `ftp` `ftps`，git 的 ssh 别名
+  `git+ssh://`、`ssh+git://`，以及 `file://`。
+- **scp 形式**：`[user@]host:path`，用户名可省略，如 `github.com:owner/repo.git`。
+  项目名本身含冒号时（`name:tag`），写 `work ./name:tag` 可避免被当成地址。
+
+**不认**裸写域名，如 `github.com/owner/repo`——git 自己也把它当本地路径。
+同理，单字母主机（`C:\x`、`C:/x`）按盘符处理，不会被当成地址。
+这两类都会当作项目名去匹配，匹配不到就报「目录不存在」。
+
+识别为地址后，按下面的规则落到本地：
 
 - 本地目录名 = 地址最后一段路径去掉 `.git`；scp 形式先按冒号切出路径部分。
 - 名称非法（空、`.`、`..`，或含路径分隔符与通配符）时报 `无法从地址推断仓库名`，
@@ -188,7 +204,7 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
 | 项目 | 工作区下的项目数 | — |
 | 磁盘 | 目标所在卷对**当前用户**可用的空间；小于 10 GB 显示为红色 | 整行不显示 |
-| Git | 当前分支（空则显示 `detached`）· `git status --porcelain` 的非空行数 | 非仓库或无 git → 整行不显示 |
+| Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain` 的非空行数） | 非仓库或无 git → 整行不显示 |
 | 节日 | 见下 | 显示 `数据获取失败⚠️` |
 | 最近活跃 | 按修改时间倒序前 4 个；名字按显示宽度截到 35 列（超出则留 32 列加 `...`），后接 `MM-dd HH:mm` | 没有项目 → 整段不显示 |
 
@@ -197,8 +213,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 - 窗口标题设为 `WORK | <项目名>`。
 - 进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`（亮白色）；回工作区根目录时不加。
   放不下时（缩进 + logo 35 列 + 2 空格 + 后缀 > 终端宽度）改为另起一行。
-- 问候语按小时分段：小于 6 点「夜深了」、小于 12「早上好」、小于 14「中午好」、
-  小于 18「下午好」、其余「晚上好」。
+- 问候语按小时分段：0-6 点「夜深了」、6-12 点「早上好」、12-14 点「中午好」、
+  14-18 点「下午好」、18-24 点「晚上好」。
 - 底部随机一条格言。
 
 ### 节假日
@@ -208,7 +224,9 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 - 文案分档：`就是今天！快乐！` / `就在明天！` / `还有 N 天，倒计时开始！`（N ≤ 3）/ `还有 N 天`；
   接口给出放假天数时追加 `(放假 N 天)`。
 - 取不到时显示 `数据获取失败⚠️`，并且**不写缓存**，下次运行仍会重试。
-- 缓存位置与跨年空窗期见「已知问题」。
+- 缓存文件在用户缓存目录：Windows `%LOCALAPPDATA%\gowork\holiday-cache.json`、
+  macOS `~/Library/Caches/gowork/holiday-cache.json`、Linux/WSL `~/.cache/gowork/holiday-cache.json`。
+  缓存的节日日期还没过去就复用。
 
 ### 退出码与失败行为
 
@@ -287,16 +305,11 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
   照样改不了父 shell 的目录。gowork 是直接调用的（不接管道、不做命令替换），
   它的 stdout 才是真终端，清屏、窗口标题和颜色才会生效。
 
-## 已知问题
+## 已知限制
 
-- **平台**：Windows、macOS、Linux（含 WSL）。平台相关的只有两个函数，用构建标签分开：
-  `sysinfo_windows.go` 读控制台模式与卷空间，`sysinfo_posix.go` 用 `statfs` 取文件系统可用空间。
-- **POSIX 清屏**：清屏会附带 `\x1b[3J` 清回滚缓冲，少数老终端不认这一条，忽略即可，不影响布局。
 - **字符宽度**：`render.go` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的
   真实 Unicode 类别判断，宽字符区段手工列举，歧义宽度一律按 1 列——它本就取决于终端配置。
   只服务行标签补白与「最近活跃」名字列两处对齐。
 - **节假日数据源**：`date.appworlds.cn`。接口语义是「严格晚于给定日期」的下一个放假日，因此用昨天
   去查，否则正好放假那天会算成「还有 1 天」。数据取得失败时只显示「数据获取失败」，不缓存以便重试。
   新一年的排期通常在 11—12 月公布，在那之前跨年的查询会返回空。
-- **缓存**：用户缓存目录下的 `gowork/holiday-cache.json`（Windows 是 `%LOCALAPPDATA%\gowork\`，
-  macOS 是 `~/Library/Caches/gowork/`，Linux/WSL 是 `~/.cache/gowork/`），缓存的节日日期还没过去就复用。
