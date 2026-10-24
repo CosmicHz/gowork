@@ -69,7 +69,7 @@ func TestConfigHintsMatchPlatform(t *testing.T) {
 			t.Errorf("Windows 下应是 PowerShell 写法：%q", env)
 		}
 		if !strings.Contains(temp, "-Workspace") {
-			t.Errorf("Windows 下应提示启动器的 -Workspace：%q", temp)
+			t.Errorf("Windows 下应提示 shell 函数的 -Workspace：%q", temp)
 		}
 		return
 	}

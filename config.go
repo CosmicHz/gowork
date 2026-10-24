@@ -47,7 +47,7 @@ func envHint() string {
 	return "export " + workspaceEnv + "='<工作区路径>'"
 }
 
-// tempFlagHint 返回临时指定工作区的写法：PowerShell 启动器暴露 -Workspace，
+// tempFlagHint 返回临时指定工作区的写法：PowerShell 的 shell 函数暴露 -Workspace，
 // POSIX 下的工作流直接把参数透传给 gowork，所以用它的 --workspace。
 func tempFlagHint() string {
 	if runtime.GOOS == "windows" {

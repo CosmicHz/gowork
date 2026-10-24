@@ -1,0 +1,148 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+// getInitScript 返回 shell 名称对应的集成代码。bash / zsh / POSIX sh 的函数体相同。
+func getInitScript(shell string) (string, bool) {
+	switch strings.ToLower(shell) {
+	case "powershell", "pwsh":
+		return initPowerShell, true
+	case "sh", "bash", "zsh", "posix":
+		return initSH, true
+	case "fish":
+		return initFish, true
+	}
+	return "", false
+}
+
+// initShell 把 shell 集成代码写到 out。用法是 `gowork init <shell>`，
+// 由用户在 shell 配置里 eval / source 这段输出。
+func initShell(args []string, out io.Writer) error {
+	if len(args) != 1 {
+		return fmt.Errorf("用法: gowork init <shell>\n可用: powershell、sh（bash / zsh / POSIX）、fish")
+	}
+	script, ok := getInitScript(args[0])
+	if !ok {
+		return fmt.Errorf("不支持的 shell：%s\n可用: powershell、sh（bash / zsh / POSIX）、fish", args[0])
+	}
+	fmt.Fprint(out, script)
+	return nil
+}
+
+const initSH = `# 由 gowork init sh 生成；bash / zsh / POSIX sh 通用。
+work() {
+    local bin cwd_file rc
+    bin=${GOWORK_BIN:-gowork}
+
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        printf 'work: 未找到 %s，请先构建并放进 PATH，或用 GOWORK_BIN 指定\n' "$bin" >&2
+        return 127
+    fi
+
+    cwd_file=$(command mktemp) || {
+        printf 'work: 无法创建临时文件\n' >&2
+        return 1
+    }
+
+    command "$bin" --cwd-file="$cwd_file" "$@"
+    rc=$?
+
+    if [ "$rc" -eq 0 ] && [ -s "$cwd_file" ]; then
+        # 反斜杠让命令名不被别名替换（POSIX 行为），否则用户若 alias 过 cd 就会跑偏。
+        \cd -- "$(command cat "$cwd_file")" || rc=$?
+    fi
+
+    command rm -f "$cwd_file"
+    return "$rc"
+}
+`
+
+const initFish = `# 由 gowork init fish 生成。
+function work --description 'gowork：跳转项目并渲染仪表盘'
+    set -l bin gowork
+    if set -q GOWORK_BIN
+        set bin $GOWORK_BIN
+    end
+
+    if not command -sq $bin
+        echo "work: 未找到 $bin，请先构建并放进 PATH，或用 GOWORK_BIN 指定" >&2
+        return 127
+    end
+
+    set -l cwd_file (command mktemp)
+    if test -z "$cwd_file"
+        echo 'work: 无法创建临时文件' >&2
+        return 1
+    end
+
+    command $bin --cwd-file=$cwd_file $argv
+    set -l rc $status
+
+    if test $rc -eq 0; and test -s $cwd_file
+        cd (command cat $cwd_file)
+        or set rc $status
+    end
+
+    command rm -f $cwd_file
+    return $rc
+end
+`
+
+const initPowerShell = `# 由 gowork init powershell 生成。
+function global:work {
+    param(
+        [Parameter(Position = 0)]
+        [string]$Project,
+
+        [int]$IndentSize = 3,
+
+        [string]$Workspace
+    )
+
+    $exe = if ($env:GOWORK_BIN) { $env:GOWORK_BIN } else { 'gowork' }
+    $found = if ($env:GOWORK_BIN) {
+        Microsoft.PowerShell.Management\Test-Path -LiteralPath $exe -PathType Leaf
+    }
+    else {
+        Microsoft.PowerShell.Core\Get-Command $exe -ErrorAction SilentlyContinue
+    }
+    if (-not $found) {
+        Microsoft.PowerShell.Utility\Write-Error "未找到 $exe，请先构建并放进 PATH，或用 GOWORK_BIN 指定"
+        $global:LASTEXITCODE = 127
+        return
+    }
+
+    $cwdFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $exeArgs = @("--indent=$IndentSize", "--cwd-file=$cwdFile")
+        if ($Project) {
+            $exeArgs += "--project=$Project"
+        }
+        if ($Workspace) {
+            $exeArgs += "--workspace=$Workspace"
+        }
+
+        # Start-Process 只是拼接命令行，所以每个参数自己加好引号。
+        $argumentLine = ($exeArgs | Microsoft.PowerShell.Core\ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '
+
+        # 用 Start-Process 让 gowork.exe 直接接管当前控制台：子进程自己写屏，
+        # 绕开 PowerShell 的输出管线，ANSI 颜色才不会被 $PSStyle.OutputRendering 抹掉。
+        $proc = Microsoft.PowerShell.Management\Start-Process -FilePath $exe -ArgumentList $argumentLine -NoNewWindow -Wait -PassThru
+        $global:LASTEXITCODE = $proc.ExitCode
+
+        if ($proc.ExitCode -eq 0) {
+            $target = Microsoft.PowerShell.Management\Get-Content -LiteralPath $cwdFile -Raw -ErrorAction SilentlyContinue
+            if ($target) {
+                Microsoft.PowerShell.Management\Set-Location -LiteralPath $target.Trim()
+            }
+        }
+    }
+    finally {
+        Microsoft.PowerShell.Management\Remove-Item -LiteralPath $cwdFile -Force -ErrorAction SilentlyContinue
+    }
+}
+`

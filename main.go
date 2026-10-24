@@ -1,9 +1,9 @@
 // Command gowork —— 项目跳板 + 环境仪表盘。
 //
 // gowork 负责目标目录解析、仪表盘渲染与仓库克隆等全部逻辑，跨 Windows / macOS / Linux；
-// bin/ 下的三个启动器（work.ps1、work.sh、work.fish）只做一件事：在当前会话里切换目录。
+// 各 shell 的集成代码由 gowork init 生成，只做一件事：在当前会话里切换目录。
 //
-// 为什么需要启动器：子进程改不了父 shell 的工作目录，所以目标目录由 --cwd-file
+// 为什么需要 shell 集成：子进程改不了父 shell 的工作目录，所以目标目录由 --cwd-file
 // 回传给 shell 侧，由它执行切换。可执行文件也能单独跑，只是不会切换目录。
 package main
 
@@ -26,9 +26,17 @@ func main() {
 	// 整个程序直写控制台，先打开 ANSI 解析与 UTF-8 代码页。
 	enableVT()
 
+	// init 子命令只打印 shell 集成代码，不解析项目参数。
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		if err := initShell(os.Args[2:], os.Stdout); err != nil {
+			fail(err, 2)
+		}
+		return
+	}
+
 	// `-N` 是本工具的项目索引写法（-1 = 最近修改的第一个），但 Go 的 flag 包会把
 	// 裸写的 -1 当成未知选项而报参数错误。先把它改写成 --project=-N，这样 PowerShell
-	// 启动器、POSIX 启动器和直接调 exe 三种入口的行为就一致了。
+	// 与 POSIX 的 shell 函数、直接调 exe 三种入口的行为就一致了。
 	os.Args = append([]string{os.Args[0]}, rewriteIndexArgs(os.Args[1:])...)
 
 	opts, err := parseFlags()
@@ -80,11 +88,11 @@ func parseFlags() (options, error) {
 	var o options
 	flag.StringVar(&o.project, "project", "", "要跳转的项目：完整名称、唯一前缀、-N（按最近修改排序的第 N 个），或仓库地址（自动克隆后进入）")
 	flag.IntVar(&o.indent, "indent", defaultIndent, "左侧缩进空格数")
-	flag.StringVar(&o.cwdFile, "cwd-file", "", "成功后把目标目录写入该文件，供 shell 启动器读取")
+	flag.StringVar(&o.cwdFile, "cwd-file", "", "成功后把目标目录写入该文件，供 shell 函数读取")
 	flag.StringVar(&o.workspace, "workspace", "", "工作区根目录；留空则依次读环境变量 "+workspaceEnv+" 与配置文件")
 	flag.BoolVar(&o.noColor, "no-color", false, "禁用 ANSI 颜色")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "用法: gowork [选项] [项目]\n\n选项:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "用法: gowork [选项] [项目]\n       gowork init <shell>  输出 shell 集成代码\n\n选项:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

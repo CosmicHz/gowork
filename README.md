@@ -10,9 +10,9 @@ PS C:\Projects\gowork> work awe
    ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝
    ██║ █╗ ██║██║   ██║██████╔╝█████╔╝
    ██║███╗██║██║   ██║██╔══██╗██╔═██╗
-    ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗  on awesome-project
-     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-   ──────────────────────────────────────────────────────────────────────────
+   ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗  on awesome-project
+    ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+   ───────────────────────────────────────────────────────
    下午好，效率正高 🚀
 
       时间        2026-10-17  星期六  16:17:18
@@ -28,12 +28,12 @@ PS C:\Projects\gowork> work awe
     3  deepseek-harness                    10-11 21:55
     4  lolcat                              10-11 21:17
 
-   ──────────────────────────────────────────────────────────────────────────
+   ───────────────────────────────────────────────────────
      代码是写给人看的，顺便让机器运行。
 ```
 
 支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7；
-macOS / Linux 提供两个启动器：`bin/work.sh`（bash / zsh / POSIX sh）与 `bin/work.fish`。
+shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / zsh / POSIX sh 与 fish。
 从源码构建需要 Go 1.26.5 或更新。
 
 ## 安装
@@ -55,7 +55,10 @@ go build -o bin\gowork.exe .
 # 3. 配置工作区（三选一，见下节）
 [Environment]::SetEnvironmentVariable('GOWORK_WORKSPACE', 'C:\Projects', 'User')
 
-# 4. 开始使用！（重启终端后）
+# 4. 把这一行加到 $PROFILE 末尾（echo $profile 可查看路径）：
+Invoke-Expression (& { (gowork init powershell | Out-String) })
+
+# 5. 重启终端后
 work
 ```
 
@@ -70,13 +73,13 @@ cd gowork
 mkdir -p ~/.local/bin
 go build -o ~/.local/bin/gowork .
 
-# 2. 把 PATH 与 shell 入口写进你的配置。下面以 zsh 为例，bash 换成 ~/.bashrc；
-#    两条都写绝对路径，$PWD 在这里展开成仓库的实际位置
-{ echo 'export PATH="$HOME/.local/bin:$PATH"'; echo ". '$PWD/bin/work.sh'"; } >> ~/.zshrc
+# 2. 把 PATH 与 shell 集成写进配置。下面以 zsh 为例，bash 换成 ~/.bashrc
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(gowork init sh)"' >> ~/.zshrc
 
 # fish 用户改用：
 #   fish_add_path ~/.local/bin
-#   echo "source '$PWD/bin/work.fish'" >> ~/.config/fish/config.fish
+#   echo 'gowork init fish | source' >> ~/.config/fish/config.fish
 
 # 3. 配置工作区（三选一，见下节）
 echo 'export GOWORK_WORKSPACE="$HOME/Projects"' >> ~/.zshrc
@@ -85,9 +88,9 @@ echo 'export GOWORK_WORKSPACE="$HOME/Projects"' >> ~/.zshrc
 work
 ```
 
-可执行文件的查找顺序是 `GOWORK_BIN` > 启动器的默认位置。默认位置：Windows 取
-`work.ps1` 同目录的 `gowork.exe`；macOS / Linux 从 PATH 找 `gowork`。不想放进 PATH
-时，把 `GOWORK_BIN` 设成可执行文件的绝对路径即可。
+`gowork init <shell>` 输出的函数会在 PATH 上找 `gowork`；不想放进 PATH 时，把
+`GOWORK_BIN` 设成可执行文件的绝对路径即可。可用的 shell 是 `powershell`、`sh`
+（bash / zsh / POSIX 通用）与 `fish`。
 
 ## 配置工作区
 
@@ -135,8 +138,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `work my-app -IndentSize 5` | 左侧缩进改为 5（默认 3，最小 3） |
 | `work my-app -Workspace D:\code` | 本次改用它作为工作区 |
 
-> 选项拼写随平台而变：Windows 上写 `-IndentSize` / `-Workspace`；
-> macOS / Linux 的启动器把参数原样透传给 gowork，写 `--indent` / `--workspace`。
+> 选项拼写随平台而变：Windows 的 shell 函数写 `-IndentSize` / `-Workspace`；
+> macOS / Linux 的函数把参数原样透传给 gowork，写 `--indent` / `--workspace`。
 
 ### 项目名匹配
 
@@ -168,10 +171,14 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 `-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报错并提示有效范围。
 
-> [!NOTE]
->
-> 工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
-> 要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
+### 名字与语法的冲突
+
+有两种输入会先按语法解析，而不是当作项目名：
+
+- `work -1`：按 `-N` 索引解析，不会进入名为 `-1` 的目录。
+- `work init`：按子命令解析，不会进入名为 `init` 的目录。
+
+要进入这类目录，写成 `work ./-1`、`work ./init`。克隆一个同名仓库也会落进这样的目录。
 
 ### 仓库地址
 
@@ -236,9 +243,9 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（并写入目标目录，启动器据此 `Set-Location` / `cd`） |
+| 0 | 成功（并写入目标目录，shell 函数据此 `Set-Location` / `cd`） |
 | 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名 |
-| 2 | 参数错误，例如 `--indent` 小于 3。三个入口一致：PowerShell 的 `-IndentSize` 只负责整数类型转换，范围由 gowork 判定 |
+| 2 | 参数错误，例如 `--indent` 小于 3、`init` 指定了不支持的 shell。三种 shell 一致：PowerShell 的 `-IndentSize` 只负责整数类型转换，范围由 gowork 判定 |
 
 失败时统一**不切换目录**，错误以红字写到 stderr。解析阶段的失败不清屏（保留现场），
 克隆失败时屏幕已清（因为要显示克隆过程）。
@@ -259,7 +266,14 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 `-N` 索引三种入口都认：裸写的 `-N` 会先被改写成 `--project=-N`，所以直接跑 `-1` 也行
 （否则 Go 的 flag 包会把它当未知选项）。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
-`--cwd-file <路径>` 把目标目录写进文件——启动器就是靠它回传的。
+`--cwd-file <路径>` 把目标目录写进文件。（shell 函数就是靠它回传的）
+
+`gowork init <shell>` 把 shell 集成代码打印到 stdout，可以直接查看，也可以像安装步骤那样
+接进 shell 配置：
+
+```sh
+./bin/gowork init sh
+```
 
 ## 目录结构
 
@@ -274,9 +288,7 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `sysinfo.go` | 跨平台部分：终端宽度、错误输出 |
 | `sysinfo_windows.go` | Windows：控制台的 ANSI 解析与 UTF-8 代码页、卷可用空间 |
 | `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；ANSI 解析无需额外开启 |
-| `bin/work.ps1` | PowerShell 入口：读取目标目录并 `Set-Location` |
-| `bin/work.sh` | POSIX sh 入口：source 后在当前会话 `cd` |
-| `bin/work.fish` | fish 入口，同上 |
+| `init.go` | `gowork init`：生成各 shell 的集成代码 |
 
 ## 开发
 
@@ -294,20 +306,20 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
 所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-N` 索引、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
 
-## 为什么需要一个 shell 启动器
+## 为什么需要 shell 集成
 
 子进程改不了父 shell 的工作目录，所以 gowork 把目标目录写进 `--cwd-file` 指定的临时文件，
-由启动器读取后切换目录。启动器是架构上无法省略的一步，但它足够薄：不含任何业务逻辑，
+由 shell 侧读取后切换目录。这一层无法省略，但它足够薄：不含任何业务逻辑，
 删掉它工具本身依然能独立运行（只是不会切目录）。
 
-三个平台各一份，做的事完全一样：
+集成代码由 `gowork init <shell>` 生成，不需要在仓库里维护启动器文件：
 
-- `bin/work.ps1`：用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。
+- `powershell`：函数用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。
   这样绕开了 PowerShell 的输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
   输出直接落在主机上、不进管道，所以 `$x = work` 捕获不到仪表盘。
-- `bin/work.sh` 与 `bin/work.fish`：写成**函数**而不是脚本——脚本是子进程，
-  照样改不了父 shell 的目录。gowork 是直接调用的（不接管道、不做命令替换），
-  它的 stdout 才是真终端，清屏、窗口标题和颜色才会生效。
+- `sh` 与 `fish`：生成一个**函数**，以便修改父 shell 的目录。
+  gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，
+  因此清屏、窗口标题和颜色才会生效。
 
 ## 已知限制
 
