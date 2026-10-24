@@ -38,7 +38,28 @@ shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / zsh / 
 
 ## 安装
 
-### Windows（PowerShell 7）
+### 一键安装
+
+脚本会构建二进制、放进默认目录，然后打印需要添加的那一行；它们不改 PATH，也不改 shell 配置。
+
+Windows（PowerShell 7）：
+
+```powershell
+irm https://raw.githubusercontent.com/CosmicHz/gowork/main/install.ps1 | iex
+```
+
+macOS / Linux：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh | sh
+```
+
+默认安装到 `%LOCALAPPDATA%\gowork\bin`（Windows）与 `~/.local/bin`（macOS / Linux），
+可以用 `-BinDir` / `--bin-dir` 改。需要 Go 1.26.5 或更新。
+
+### 手动安装
+
+Windows（PowerShell 7）:
 
 ```powershell
 # 0. 克隆
@@ -62,7 +83,7 @@ Invoke-Expression (& { (gowork init powershell | Out-String) })
 work
 ```
 
-### macOS / Linux
+macOS / Linux :
 
 ```sh
 # 0. 克隆
@@ -289,6 +310,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `sysinfo_windows.go` | Windows：控制台的 ANSI 解析与 UTF-8 代码页、卷可用空间 |
 | `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；ANSI 解析无需额外开启 |
 | `init.go` | `gowork init`：生成各 shell 的集成代码 |
+| `install.sh` | macOS / Linux 安装脚本：构建并放到 PATH 目录 |
+| `install.ps1` | Windows 安装脚本，同上 |
 
 ## 开发
 
