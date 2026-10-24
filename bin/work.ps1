@@ -9,6 +9,9 @@
     工作区根目录按优先级取：-Workspace > 环境变量 GOWORK_WORKSPACE > 配置文件
     %LOCALAPPDATA%\gowork\config.json；三者都没有会报错并要求显式配置。
 
+    可执行文件默认取本脚本同目录的 gowork.exe；设了环境变量 GOWORK_BIN 则用它，
+    与 work.sh / work.fish 保持一致。
+
 .EXAMPLE
     work                回到工作区根目录
     work my-app         按唯一前缀跳转
@@ -29,9 +32,14 @@ param(
     [string]$Workspace
 )
 
-$exe = Join-Path $PSScriptRoot 'gowork.exe'
+$exe = if ($env:GOWORK_BIN) { $env:GOWORK_BIN } else { Join-Path $PSScriptRoot 'gowork.exe' }
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-    Write-Error "未找到 gowork.exe，请先构建：go build -o bin\gowork.exe ."
+    if ($env:GOWORK_BIN) {
+        Write-Error "GOWORK_BIN 指向的文件不存在：$exe"
+    }
+    else {
+        Write-Error "未找到 gowork.exe，请先构建：go build -o bin\gowork.exe ."
+    }
     $global:LASTEXITCODE = 127
     return
 }
