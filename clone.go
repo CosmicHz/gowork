@@ -9,15 +9,21 @@ import (
 	"strings"
 )
 
-// scpLikePattern 形如 git@github.com:owner/repo.git 的地址。
-var scpLikePattern = regexp.MustCompile(`^[^/\\:@]+@[^/\\:]+:.+$`)
+// scpLikePattern 匹配 git 的 scp 形式地址：可带用户名的 [user@]host:path。
+// 与 git 一致，用户名可以省略（如 github.com:owner/repo.git）。
+var scpLikePattern = regexp.MustCompile(`^([^/\\:@]+@)?[^/\\:]+:.+$`)
 
-var urlSchemes = []string{"https://", "http://", "ssh://", "git://", "ftp://", "ftps://"}
+// urlSchemes 是 git 认的协议。带 + 的两个是 git 对 ssh 的别名。
+var urlSchemes = []string{
+	"https://", "http://", "ssh://", "git://", "ftp://", "ftps://",
+	"git+ssh://", "ssh+git://", "file://",
+}
 
-// repoURL 判断参数是不是仓库地址。只认带协议的 URL 与 scp 形式，
-// 免得把本地路径或普通项目名误判成地址。
+// repoURL 判断参数是不是仓库地址。判定范围与 git 自身保持一致：
+// 带协议的 URL 与 scp 形式算地址；裸写域名（github.com/foo/bar）与
+// 单字母主机（C:\x 这类盘符路径）不认。
 func repoURL(arg string) bool {
-	if scpLikePattern.MatchString(arg) {
+	if scpLikePattern.MatchString(arg) && !windowsDrivePath(arg) {
 		return true
 	}
 	lower := strings.ToLower(arg)
@@ -27,6 +33,16 @@ func repoURL(arg string) bool {
 		}
 	}
 	return false
+}
+
+// windowsDrivePath 匹配 C:\x、C:/x、C:relative 这类盘符写法。
+// git 把单字母主机当盘符处理成本地路径，我们照做。
+func windowsDrivePath(s string) bool {
+	if len(s) < 2 || s[1] != ':' {
+		return false
+	}
+	c := s[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // repoName 取地址里最后一段路径，去掉 .git 后缀，作为本地目录名。

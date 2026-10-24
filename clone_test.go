@@ -12,6 +12,12 @@ func TestRepoURL(t *testing.T) {
 		"ftp://host/o/r",
 		"ftps://host/o/r",
 		"git@github.com:owner/repo.git",
+		// git 同样认的几种形式
+		"github.com:owner/repo.git", // scp 形式可省略用户名
+		"host:path",
+		"git+ssh://host/o/r",
+		"ssh+git://host/o/r",
+		"file:///tmp/repo.git",
 	}
 	for _, s := range yes {
 		if !repoURL(s) {
@@ -20,6 +26,7 @@ func TestRepoURL(t *testing.T) {
 	}
 
 	// 裸写域名、本地路径、普通项目名都必须当成项目名，不能误判成地址。
+	// 前两组在 git 眼里也是本地路径，所以这里必须保持不认。
 	no := []string{
 		"github.com/foo/bar",
 		"my-app",
@@ -27,6 +34,8 @@ func TestRepoURL(t *testing.T) {
 		"-1",
 		"",
 		`C:\Projects\x`,
+		"C:/Projects/x",
+		"x:y", // 单字母主机 = 盘符
 		"./local",
 		"../sibling",
 	}
@@ -44,7 +53,10 @@ func TestRepoName(t *testing.T) {
 		"https://github.com/octocat/Hello-World/":    "Hello-World",
 		"git@github.com:owner/repo.git":              "repo",
 		"git@github.com:owner/repo":                  "repo",
+		"github.com:owner/repo.git":                  "repo",
 		"ssh://git@host:2222/owner/repo.git":         "repo",
+		"git+ssh://host/owner/repo.git":              "repo",
+		"file:///tmp/repo.git":                       "repo",
 		"https://host/a/b/c.git":                     "c",
 	}
 	for in, want := range cases {
