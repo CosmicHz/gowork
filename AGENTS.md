@@ -230,3 +230,8 @@ go test ./...
 - 新一年法定排期公布前只有节日兜底，不预测放假安排。
 - 安装脚本只支持源码构建，需要本机 Go；不会下载 release 产物。
 - Windows 上的 fish 不在 CI 覆盖范围（Linux / macOS 覆盖）。
+- **颜色开关的参数穿透（待改进）**：`colorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
+  `fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `main` 传进 `fail`，为此多了一个
+  `bool` 参数，目前只有 `main -> fail` 一层，先接受。若错误输出还要别的配置，改为传
+  `options` 或收一个统一配置，不要继续加布尔参数；也不要改用包级变量（与 `options` 双轨）
+  或 `os.Setenv("NO_COLOR", ...)`（会污染 `git clone` 等子进程）。

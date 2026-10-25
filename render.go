@@ -68,7 +68,7 @@ func newRenderer(o options) *renderer {
 		workspace: o.workspace,
 	}
 	r.tty = term.IsTerminal(int(os.Stdout.Fd()))
-	r.color = r.tty && !o.noColor && os.Getenv("NO_COLOR") == ""
+	r.color = colorEnabled(r.tty, o.noColor)
 	r.accent = accentPalette[rand.IntN(len(accentPalette))]
 	return r
 }

@@ -29,7 +29,7 @@ func main() {
 	// init 子命令只打印 shell 集成代码，不解析项目参数。
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		if err := initShell(os.Args[2:], os.Stdout); err != nil {
-			fail(err, 2)
+			fail(err, 2, false)
 		}
 		return
 	}
@@ -41,10 +41,11 @@ func main() {
 
 	opts, err := parseFlags()
 	if err != nil {
-		fail(err, 2)
+		// parseFlags 出错时也会返回解析结果，--no-color 依然生效。
+		fail(err, 2, opts.noColor)
 	}
 	if err := run(opts); err != nil {
-		fail(err, 1)
+		fail(err, 1, opts.noColor)
 	}
 }
 
