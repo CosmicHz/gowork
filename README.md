@@ -192,14 +192,10 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 `-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报错并提示有效范围。
 
-### 名字与语法的冲突
-
-有两种输入会先按语法解析，而不是当作项目名：
-
-- `work -1`：按 `-N` 索引解析，不会进入名为 `-1` 的目录。
-- `work init`：按子命令解析，不会进入名为 `init` 的目录。
-
-要进入这类目录，写成 `work ./-1`、`work ./init`。克隆一个同名仓库也会落进这样的目录。
+> [!NOTE]
+>
+> 工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
+> 要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
 
 ### 仓库地址
 
@@ -328,6 +324,12 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
 平台相关的只有 `enableVT` 与 `diskFreeGB` 两个函数，用构建标签隔开；其余逻辑与平台无关，
 所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-N` 索引、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
+
+CI 在 Windows、macOS、Linux 三个平台各跑一遍 `gofmt`、`go vet` 与 `go test`（用 gotestsum
+输出，摘要里会列出跳过数量，配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试会用 bash、zsh、dash、
+fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外用 PowerShell 5.1；
+某个 shell 没装就跳过。CI 会在跑测试前逐个确认这些解释器都在，装失败直接报错，
+避免静默失去覆盖。
 
 ## 为什么需要 shell 集成
 

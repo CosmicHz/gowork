@@ -15,7 +15,7 @@ import (
 
 const holidayAPI = "https://uapis.cn/api/v1/misc/holiday-calendar"
 
-// holidayCacheVersion 变更数据源或缓存结构时递增，旧的缓存直接丢弃。
+// holidayCacheVersion 变更数据源或缓存结构时递增；版本不匹配的缓存直接丢弃。
 const holidayCacheVersion = 4
 
 // holiday 是一次查询的结果；Known 为 false 时表示数据不可用。
