@@ -1,4 +1,5 @@
-package main
+// Package shell 生成各 shell 的集成代码：只负责把目标目录切过去。
+package shell
 
 import (
 	"fmt"
@@ -6,8 +7,8 @@ import (
 	"strings"
 )
 
-// getInitScript 返回 shell 名称对应的集成代码。bash / zsh / POSIX sh 的函数体相同。
-func getInitScript(shell string) (string, bool) {
+// template 返回 shell 名称对应的集成代码。bash / zsh / POSIX sh 的函数体相同。
+func template(shell string) (string, bool) {
 	switch strings.ToLower(shell) {
 	case "powershell", "pwsh":
 		return initPowerShell, true
@@ -19,17 +20,17 @@ func getInitScript(shell string) (string, bool) {
 	return "", false
 }
 
-// initShell 把 shell 集成代码写到 out。用法是 `gowork init <shell>`，
+// Init 把 shell 集成代码写到 out。用法是 `gowork init <shell>`，
 // 由用户在 shell 配置里 eval / source 这段输出。
-func initShell(args []string, out io.Writer) error {
+func Init(args []string, out io.Writer) error {
 	if len(args) != 1 {
 		return fmt.Errorf("用法: gowork init <shell>\n可用: powershell、sh（bash / zsh / POSIX）、fish")
 	}
-	script, ok := getInitScript(args[0])
+	s, ok := template(args[0])
 	if !ok {
 		return fmt.Errorf("不支持的 shell：%s\n可用: powershell、sh（bash / zsh / POSIX）、fish", args[0])
 	}
-	fmt.Fprint(out, script)
+	fmt.Fprint(out, s)
 	return nil
 }
 

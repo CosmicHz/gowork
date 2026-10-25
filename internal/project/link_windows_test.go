@@ -1,4 +1,4 @@
-package main
+package project
 
 import (
 	"os"
@@ -50,9 +50,9 @@ func enableSymlinkPrivilege() bool {
 	return windows.AdjustTokenPrivileges(token, false, &state, 0, nil, nil) == nil
 }
 
-// TestListProjectsFollowsJunction 固定用目录联接覆盖 Windows。
+// TestListFollowsJunction 固定用目录联接覆盖 Windows。
 // 目录联接不需要任何特权，符号链接用例因权限跳过时它仍然会跑。
-func TestListProjectsFollowsJunction(t *testing.T) {
+func TestListFollowsJunction(t *testing.T) {
 	root := t.TempDir()
 	real := filepath.Join(t.TempDir(), "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
@@ -62,7 +62,7 @@ func TestListProjectsFollowsJunction(t *testing.T) {
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(root, "link"), real).CombinedOutput(); err != nil {
 		t.Fatalf("创建目录联接失败：%v\n%s", err, out)
 	}
-	if got, want := projectNames(listProjects(root)), []string{"link"}; !slices.Equal(got, want) {
+	if got, want := projectNames(List(root)), []string{"link"}; !slices.Equal(got, want) {
 		t.Errorf("指向目录的目录联接应算项目，得到 %v", got)
 	}
 }

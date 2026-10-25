@@ -1,8 +1,8 @@
-package main
+package clone
 
 import "testing"
 
-func TestRepoURL(t *testing.T) {
+func TestIsURL(t *testing.T) {
 	yes := []string{
 		"https://github.com/octocat/Hello-World.git",
 		"http://host/a/b",
@@ -20,8 +20,8 @@ func TestRepoURL(t *testing.T) {
 		"file:///tmp/repo.git",
 	}
 	for _, s := range yes {
-		if !repoURL(s) {
-			t.Errorf("repoURL(%q) = false, 想要 true", s)
+		if !IsURL(s) {
+			t.Errorf("IsURL(%q) = false, 想要 true", s)
 		}
 	}
 
@@ -40,8 +40,8 @@ func TestRepoURL(t *testing.T) {
 		"../sibling",
 	}
 	for _, s := range no {
-		if repoURL(s) {
-			t.Errorf("repoURL(%q) = true, 想要 false", s)
+		if IsURL(s) {
+			t.Errorf("IsURL(%q) = true, 想要 false", s)
 		}
 	}
 }

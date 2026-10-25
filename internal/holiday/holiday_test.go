@@ -1,6 +1,7 @@
-package main
+package holiday
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,5 +165,64 @@ func TestParseHoliday(t *testing.T) {
 				t.Errorf("Days = %d, 想要 %d", h.Days, c.wantDays)
 			}
 		})
+	}
+}
+
+func TestHolidayLine(t *testing.T) {
+	now := time.Date(2026, 10, 18, 15, 0, 0, 0, time.Local)
+
+	cases := []struct {
+		desc string
+		h    Holiday
+		want string
+	}{
+		{"取数失败", Holiday{Name: "数据获取失败", Icon: "⚠️"}, "数据获取失败⚠️"},
+		{"就是今天", Holiday{Known: true, Date: now, Name: "国庆节", Icon: "🇨🇳"}, "就是今天！快乐！"},
+		{"就在明天", Holiday{Known: true, Date: now.AddDate(0, 0, 1), Name: "元旦", Icon: "🎉"}, "就在明天！"},
+		{"三天内", Holiday{Known: true, Date: now.AddDate(0, 0, 3), Name: "元旦", Icon: "🎉"}, "还有 3 天，倒计时开始！"},
+		{"三天外", Holiday{Known: true, Date: now.AddDate(0, 0, 76), Name: "元旦", Icon: "🎉"}, "还有 76 天"},
+		{"带放假天数", Holiday{Known: true, Date: now.AddDate(0, 0, 76), Name: "元旦", Days: 3, Icon: "🎉"}, "(放假 3 天)"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got := Line(c.h, now)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("Line = %q, 想要包含 %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestHolidayIcon(t *testing.T) {
+	cases := map[string]string{
+		"元旦":      "🎉",
+		"春节":      "🧧",
+		"清明节":     "🌿",
+		"劳动节":     "🔧",
+		"端午节":     "🐉",
+		"中秋节":     "🥮",
+		"国庆节":     "🇨🇳",
+		"情人节":     "💝",
+		"妇女节":     "🌸",
+		"愚人节":     "🤡",
+		"儿童节":     "🍭",
+		"圣诞节":     "🎄",
+		"万圣节":     "🎃",
+		"某个没听过的节": "📅",
+	}
+	for name, want := range cases {
+		if got := holidayIcon(name); got != want {
+			t.Errorf("holidayIcon(%q) = %q, 想要 %q", name, got, want)
+		}
+	}
+}
+
+func TestStartOfDay(t *testing.T) {
+	ts := time.Date(2026, 10, 18, 23, 59, 59, 999, time.Local)
+	got := startOfDay(ts)
+	want := time.Date(2026, 10, 18, 0, 0, 0, 0, time.Local)
+	if !got.Equal(want) {
+		t.Errorf("startOfDay = %v, 想要 %v", got, want)
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"slices"
@@ -27,8 +27,8 @@ func TestRewriteIndexArgs(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			if got := rewriteIndexArgs(c.in); !slices.Equal(got, c.want) {
-				t.Errorf("rewriteIndexArgs(%v) = %v, 想要 %v", c.in, got, c.want)
+			if got := RewriteIndexArgs(c.in); !slices.Equal(got, c.want) {
+				t.Errorf("RewriteIndexArgs(%v) = %v, 想要 %v", c.in, got, c.want)
 			}
 		})
 	}

@@ -1,4 +1,5 @@
-package main
+// Package clone 负责识别仓库地址、推断仓库名并调用 git 克隆。
+package clone
 
 import (
 	"fmt"
@@ -7,6 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gowork/internal/project"
+	"gowork/internal/render"
 )
 
 // scpLikePattern 匹配 git 的 scp 形式地址：可带用户名的 [user@]host:path。
@@ -19,10 +23,10 @@ var urlSchemes = []string{
 	"git+ssh://", "ssh+git://", "file://",
 }
 
-// repoURL 判断参数是不是仓库地址。判定范围与 git 自身保持一致：
+// IsURL 判断参数是不是仓库地址。判定范围与 git 自身保持一致：
 // 带协议的 URL 与 scp 形式算地址；裸写域名（github.com/foo/bar）与
 // 单字母主机（C:\x 这类盘符路径）不认。
-func repoURL(arg string) bool {
+func IsURL(arg string) bool {
 	if scpLikePattern.MatchString(arg) && !windowsDrivePath(arg) {
 		return true
 	}
@@ -71,40 +75,35 @@ func validRepoName(name string) bool {
 	return !strings.ContainsAny(name, `/\:*?"<>|`)
 }
 
-// cloneProject 把仓库克隆到工作区并返回目标目录。
+// Project 把仓库克隆到工作区并返回目标目录。
 // 目录已存在时什么都不做，直接进去，所以重复执行是幂等的。
-func cloneProject(o options, r *renderer) (string, error) {
-	if !isDir(o.workspace) {
-		return "", fmt.Errorf("目录不存在：%s", o.workspace)
+func Project(workspace, rawURL string, r *render.Renderer) (string, error) {
+	if !project.IsDir(workspace) {
+		return "", fmt.Errorf("目录不存在：%s", workspace)
 	}
 
-	name := repoName(o.project)
+	name := repoName(rawURL)
 	if !validRepoName(name) {
-		return "", fmt.Errorf("无法从地址推断仓库名：%s", o.project)
+		return "", fmt.Errorf("无法从地址推断仓库名：%s", rawURL)
 	}
 
-	dest := filepath.Join(o.workspace, name)
-	if isDir(dest) {
+	dest := filepath.Join(workspace, name)
+	if project.IsDir(dest) {
 		return dest, nil
 	}
 	if _, err := exec.LookPath("git"); err != nil {
-		return "", fmt.Errorf("未找到 git，无法克隆 %s", o.project)
+		return "", fmt.Errorf("未找到 git，无法克隆 %s", rawURL)
 	}
 
-	r.clearScreen()
-	r.println()
-	r.println(r.indent + r.paint(r.accent, "正在克隆仓库"))
-	r.row("地址", o.project, ansiWhite)
-	r.row("目标", dest, ansiWhite)
-	r.println()
+	r.CloneNotice(rawURL, dest)
 
 	// 让 git 直接占用当前控制台，进度条和凭据提示都能正常工作。
-	cmd := exec.Command("git", "clone", o.project, dest)
+	cmd := exec.Command("git", "clone", rawURL, dest)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("克隆失败：%s", o.project)
+		return "", fmt.Errorf("克隆失败：%s", rawURL)
 	}
 	return dest, nil
 }

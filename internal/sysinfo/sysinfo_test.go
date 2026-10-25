@@ -1,4 +1,4 @@
-package main
+package sysinfo
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 )
 
 // TestColorEnabled 钉住颜色开关的三个条件：真实终端、未传 --no-color、NO_COLOR 为空。
-// fail 与 renderer 都只经这个函数判定，所以这里是唯一需要覆盖的地方。
+// Fail 与 renderer 都只经这个函数判定，所以这里是唯一需要覆盖的地方。
 func TestColorEnabled(t *testing.T) {
 	cases := []struct {
 		desc    string
@@ -40,8 +40,8 @@ func TestColorEnabled(t *testing.T) {
 				_ = os.Unsetenv("NO_COLOR")
 			}
 
-			if got := colorEnabled(c.isTTY, c.noColor); got != c.want {
-				t.Errorf("colorEnabled(%v, %v) = %v，想要 %v", c.isTTY, c.noColor, got, c.want)
+			if got := ColorEnabled(c.isTTY, c.noColor); got != c.want {
+				t.Errorf("ColorEnabled(%v, %v) = %v，想要 %v", c.isTTY, c.noColor, got, c.want)
 			}
 		})
 	}

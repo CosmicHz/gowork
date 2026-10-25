@@ -8,6 +8,7 @@
 - 跨 Windows / macOS / Linux（含 WSL）的项目跳板 + 环境仪表盘。
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
 - 只有两个依赖：`golang.org/x/term`（终端宽度判断）与 `golang.org/x/sys`（Windows 控制台、磁盘空间）。
+- 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`ansi`、`cli`、`config`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
 - shell 侧只有一层壳：`gowork init <shell>` 打印函数代码，用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
 
@@ -19,36 +20,46 @@
 
 1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`（PowerShell 还会补
    `--indent=<n>` 与 `--project` / `--workspace`）。
-2. `main()`：`enableVT()` → 若 `os.Args[1] == "init"` 走 `initShell` 直接返回 →
-   `rewriteIndexArgs` 改写裸 `-N` → `parseFlags`。
-3. `run()`：`resolveWorkspace` → `newRenderer` → `listProjects` →
-   若参数像仓库地址则 `cloneProject` 并重扫项目，否则 `resolveTarget`。
-4. `renderer.render`：清屏、窗口标题、警告、logo、仪表盘、格言。
-5. 成功才把目标目录写入 `--cwd-file`；退出码 0 时 shell 函数读取并切目录。
-6. 失败统一走 `fail`：错误写 stderr，解析类错误退出 1，参数错误退出 2；
+2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
+3. `cli.Main`：`sysinfo.EnableVT()` → 若 `os.Args[1] == "init"` 走 `shell.Init` 直接返回 →
+   `RewriteIndexArgs` 改写裸 `-N` → `Parse`。
+4. `cli.Run`：`config.Resolve` → `render.New` → `project.List` →
+   若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
+5. `render.Renderer.Render`：清屏、窗口标题、警告、logo、仪表盘、格言。
+6. 成功才把目标目录写入 `--cwd-file`；退出码 0 时 shell 函数读取并切目录。
+7. 失败统一走 `sysinfo.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
    **不切换目录**。
 
 注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` 里的 `init`
 是**项目名**（`flag.Arg(0)`），不会触发 init 子命令；只有直接运行
 `gowork init <shell>`（`init` 位于 `argv[1]`）才输出集成代码。
 
-## 文件地图
+## 目录结构
+
+```text
+cmd/gowork/            入口，只把 os.Args 交给 internal/cli
+internal/
+  ansi/                ANSI 前景色常量与主色调色板
+  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs）、编排（Main / Run）
+  config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
+  project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
+  render/              仪表盘渲染、ANSI 使用、row / rule / printRecent、宽度计算与截断
+  holiday/             接口请求、事件整理与挑选、缓存、节日图标、"节日"行文案
+  clone/               地址识别、仓库名推断与校验、git clone 直连控制台
+  shell/               Init（switch）、三份 shell 模板
+  sysinfo/             ColorEnabled、Fail、TerminalWidth（跨平台）
+install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提示；不改用户环境
+.github/workflows/     ci.yml（三平台测试 + shell 预检）、release.yml（v* 标签发布）
+```
+
+`internal/sysinfo` 里的平台相关文件：
 
 | 文件 | 内容 |
 | --- | --- |
-| `main.go` | `main`、`run`、参数解析；`rewriteIndexArgs` 与 `valueFlags` |
-| `config.go` | 工作区优先级、配置文件、缓存目录；平台相关的提示文案 |
-| `projects.go` | `listProjects`、`resolveTarget`、`indexPattern`、`prefixMatches`、`gitInfo` |
-| `render.go` | 仪表盘渲染、ANSI、`row` / `rule` / `printRecent`、宽度计算与截断 |
-| `holiday.go` | 接口请求、事件整理与挑选、缓存、节日图标 |
-| `clone.go` | 地址识别、仓库名推断与校验、`git clone` 直连控制台 |
-| `sysinfo.go` | `fail`、`terminalWidth`（跨平台） |
-| `sysinfo_windows.go` | `enableVT`（VT + UTF-8 代码页）、`diskFreeGB`（`GetDiskFreeSpaceEx`） |
-| `sysinfo_posix.go` | `enableVT` 空实现、`diskFreeGB`（`statfs` 的 `Bavail * Bsize`） |
-| `init.go` | `getInitScript`（switch）、`initShell`、三份 shell 模板 |
-| `install.sh` / `install.ps1` | 构建并投放二进制，打印 PATH 与 init 提示；不改用户环境 |
-| `.github/workflows/ci.yml` | 三平台测试 + shell 预检 |
-| `.github/workflows/release.yml` | `v*` 标签发布 |
+| `console_windows.go` | `EnableVT`（VT + UTF-8 代码页） |
+| `console_posix.go` | `EnableVT` 空实现 |
+| `disk_windows.go` | `DiskFreeGB`（`GetDiskFreeSpaceEx`） |
+| `disk_posix.go` | `DiskFreeGB`（`statfs` 的 `Bavail * Bsize`） |
 
 ## 行为细节
 
@@ -61,31 +72,31 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 项目扫描与匹配
 
-- `listProjects` 读工作区一级目录：跳过 `.` 开头，文件跳过；判断用 `os.Stat` 而不是
+- `project.List` 读工作区一级目录：跳过 `.` 开头，文件跳过；判断用 `os.Stat` 而不是
   `DirEntry.IsDir`，因此符号链接、junction 指向目录时都算项目。
 - 按 `ModTime` 倒序；`-N` 取第 N 个（1 起），越界报 `有效范围: 1-N`。
-- `resolveTarget`：完整名 → 前缀（大小写不敏感）→ 唯一命中跳转；多个命中取**名字最短**，
+- `project.Resolve`：完整名 → 前缀（大小写不敏感）→ 唯一命中跳转；多个命中取**名字最短**，
   并列时按字典序；同时返回候选列表，渲染时在清屏后以黄色警告列出。0 命中报目录不存在。
 - 空项目名表示回工作区根目录。
-- `gitInfo`：`.git` 存在（文件或目录都算，兼容 worktree）且 PATH 有 git，才显示分支与
+- `project.GitInfo`：`.git` 存在（文件或目录都算，兼容 worktree）且 PATH 有 git，才显示分支与
   `git status --porcelain` 的非空行数；空分支名显示 `detached`。
 
 ### 仓库地址与克隆
 
-- `repoURL` 与 git 的识别范围对齐：`http/https/ssh/git/ftp/ftps`、`git+ssh://`、
+- `clone.IsURL` 与 git 的识别范围对齐：`http/https/ssh/git/ftp/ftps`、`git+ssh://`、
   `ssh+git://`、`file://`，以及 `[user@]host:path` 的 scp 形式；单字母主机
   （`C:\x`、`C:/x`）按盘符处理，不算地址；裸域名不算地址。
-- `repoName`：去掉结尾 `/` 与 `.git`，scp 形式先按最后一个冒号切出路径，再取最后一段。
-- `validRepoName` 拒绝空、`.`、`..` 与 `/\:*?"<>|`，避免写出工作区。
+- `clone.repoName`：去掉结尾 `/` 与 `.git`，scp 形式先按最后一个冒号切出路径，再取最后一段。
+- `clone.validRepoName` 拒绝空、`.`、`..` 与 `/\:*?"<>|`，避免写出工作区。
 - 目标目录已存在则直接进入（幂等），不提示、不重复克隆。
-- 需要克隆时先清屏，打印地址与目标，再 `git clone` 直连 stdin/stdout/stderr，
-  让进度条、SSH 与凭据提示正常工作；失败报 `克隆失败：<地址>`，退出码 1。
+- 需要克隆时先清屏，打印地址与目标（`Renderer.CloneNotice`），再 `git clone` 直连
+  stdin/stdout/stderr，让进度条、SSH 与凭据提示正常工作；失败报 `克隆失败：<地址>`，退出码 1。
 
 ### 仪表盘
 
-- `newRenderer`：`tty = term.IsTerminal(stdout)`；颜色 = tty && 未传 `--no-color` &&
-  `NO_COLOR` 为空；accent 从青/绿/黄/紫随机选。
-- `render` 先清屏再输出警告，避免警告被清掉。清屏、窗口标题仅在 tty 下执行。
+- `render.New`：`tty = term.IsTerminal(stdout)`；颜色由 `sysinfo.ColorEnabled` 判定
+  （tty && 未传 `--no-color` && `NO_COLOR` 为空）；accent 从青/绿/黄/紫随机选。
+- `Render` 先清屏再输出警告，避免警告被清掉。清屏、窗口标题仅在 tty 下执行。
 - 进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`；放不下就另起一行；
   回工作区根目录不加。
 - 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、磁盘（可用 <10 GB 变红，
@@ -123,7 +134,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 - 入口：`gowork init <shell>`；`shell` 大小写不敏感，`powershell` / `pwsh`、
   `sh` / `bash` / `zsh` / `posix`、`fish`。参数缺失或未知 shell 退出码 2。
-- 三份模板都在 `init.go` 的 raw string 里；模板里外部命令统一加 `command` 前缀，
+- 三份模板都在 `internal/shell/shell.go` 的 raw string 里；模板里外部命令统一加 `command` 前缀，
   PowerShell 的 cmdlet 用模块全名（`Microsoft.PowerShell.Management\...`），
   避免被用户别名或同名函数劫持。
 - POSIX：`local` + `mktemp` + `command cat` + `\cd --`，返回二进制的退出码；
@@ -140,7 +151,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 ### 安装脚本
 
 - `install.sh` / `install.ps1`：若当前目录是本仓库（`go.mod` 里 `module gowork`）就直接
-  构建，否则 `git clone --depth 1` 到临时目录再构建。
+  构建，否则 `git clone --depth 1` 到临时目录再构建；构建目标是 `./cmd/gowork`。
 - 默认目录：`~/.local/bin`（macOS / Linux）、`%LOCALAPPDATA%\gowork\bin`（Windows）；
   `--bin-dir` / `-BinDir` 可改，shell 脚本还认 `GOWORK_BIN_DIR`。
 - 只打印 PATH 提示与 init 那一行，不改 PATH、不改 `$PROFILE`。
@@ -157,7 +168,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - 测试用 `go run gotest.tools/gotestsum@v1.13.0 --format=testname -- -count=1 ./...`：
   `go run` 不依赖 `GOPATH/bin` 在 PATH 上，版本固定；摘要会列出 skipped 数量。
 - `release.yml`：push `v*` 标签触发；先在 ubuntu 跑 vet + 测试，再交叉编译
-  linux/darwin/windows × amd64/arm64 六个产物；`-trimpath -ldflags '-s -w'`；
+  linux/darwin/windows × amd64/arm64 六个产物（`./cmd/gowork`）；`-trimpath -ldflags '-s -w'`；
   tar.gz（Windows 为 zip），命名 `gowork_<版本>_<系统>_<架构>`；
   汇总 `checksums.txt`，用 `softprops/action-gh-release` 发布并自动生成 release notes。
 - 发布不依赖 GoReleaser。
@@ -171,17 +182,19 @@ go test ./...
 ```
 
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
-- `init_test.go`：
+- `internal/shell/shell_test.go`：
   - 各 shell 名称、别名、大小写、错误参数；
-  - `TestInitScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell
+  - `TestScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell
     解析，缺哪个就 skip；bash 系用 `-n`，PowerShell 用 `Parser::ParseFile`。
   - PowerShell 检查写临时文件（UTF-8 带 BOM），**不能走 stdin**（见坑 1）。
   - `TestCheckPowerShellDetectsError` 用坏脚本确认检查不是空转。
-- `projects_test.go`：
-  - `TestListProjectsFollowsDirLink` 直接建目录符号链接；Windows 上失败时启用
+- `internal/project/project_test.go`：
+  - `TestListFollowsDirLink` 直接建目录符号链接；Windows 上失败时启用
     `SeCreateSymbolicLinkPrivilege` 重试，仍建不了就 skip，不退回目录联接。
-  - `TestListProjectsFollowsJunction`（仅 Windows）固定用 `mklink /J`，
+  - `TestListFollowsJunction`（仅 Windows）固定用 `mklink /J`，
     保证符号链接用例因权限跳过时，「链接指向目录算项目」仍然有覆盖。
+- `internal/sysinfo/sysinfo_test.go` 的 `TestColorEnabled` 钉住颜色开关的三个条件。
+- `internal/cli/cli_test.go` 覆盖裸 `-N` 改写，含各带值选项不应被改写的情况。
 - 跳过项取决于环境：缺 zsh / dash / fish 会跳过对应的语法检查；Windows 上建不了
   符号链接时跳过该用例。CI 会确保解释器存在。
 
@@ -202,9 +215,9 @@ go test ./...
 5. **假期中途只向后数会少算天数**。必须用 `nearby.previous` 找假期开头，`restRun` 才给出
    整段长度；缓存也必须保留 previous。
 6. **缓存要存整理后的数据**，不要原样存接口响应；数据结构变化时递增
-   `holidayCacheVersion`（当前 4）；版本不匹配的缓存直接丢弃。
-7. **裸写 `-N` 会被 `flag` 包当成未知选项**。`rewriteIndexArgs` 在解析前改写成
-   `--project=-N`；新增带值的选项必须同步加进 `valueFlags`，否则 `--flag -1` 会被误改。
+   `cacheVersion`（当前 4）；版本不匹配的缓存直接丢弃。
+7. **裸写 `-N` 会被 `flag` 包当成未知选项**。`cli.RewriteIndexArgs` 在解析前改写成
+   `--project=-N`；新增带值的选项必须同步加进 `cli.valueFlags`，否则 `--flag -1` 会被误改。
 8. **`init` 子命令只在 `argv[1]` 时生效**。shell 函数总把 `--cwd-file` 放最前面，
    所以 `work init` 是项目名；不要据此认为「`work init` 会打印脚本」。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
@@ -217,12 +230,13 @@ go test ./...
 
 ## 改动时的连带点
 
-- 加 shell：`init.go` 的 switch、模板、`init_test.go` 用例、CI 安装与预检、README 的平台说明。
-- 加平台相关函数：放 `sysinfo_windows.go` / `sysinfo_posix.go`，用构建标签隔开；
+- 加 shell：`internal/shell/shell.go` 的 switch、模板、`shell_test.go` 用例、CI 安装与预检、README 的平台说明。
+- 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
   其余逻辑必须能在任意平台 `go test`。
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。
-- 加命令行选项：若是带值选项，同步 `main.go` 的 `valueFlags`；`--help` 里补说明。
-- 改渲染：`render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
+- 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；`--help` 里补说明。
+- 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
+- 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`。
 
 ## 已知限制
 
@@ -230,8 +244,8 @@ go test ./...
 - 新一年法定排期公布前只有节日兜底，不预测放假安排。
 - 安装脚本只支持源码构建，需要本机 Go；不会下载 release 产物。
 - Windows 上的 fish 不在 CI 覆盖范围（Linux / macOS 覆盖）。
-- **颜色开关的参数穿透（待改进）**：`colorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
-  `fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `main` 传进 `fail`，为此多了一个
-  `bool` 参数，目前只有 `main -> fail` 一层，先接受。若错误输出还要别的配置，改为传
-  `options` 或收一个统一配置，不要继续加布尔参数；也不要改用包级变量（与 `options` 双轨）
+- **颜色开关的参数穿透（待改进）**：`sysinfo.ColorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
+  `sysinfo.Fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `cli` 传进 `Fail`，为此多了一个
+  `bool` 参数，目前只有 `cli.Main -> sysinfo.Fail` 一层，先接受。若错误输出还要别的配置，改为传
+  `Options` 或收一个统一配置，不要继续加布尔参数；也不要改用包级变量（与 `Options` 双轨）
   或 `os.Setenv("NO_COLOR", ...)`（会污染 `git clone` 等子进程）。

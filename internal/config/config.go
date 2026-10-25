@@ -1,4 +1,5 @@
-package main
+// Package config 负责工作区解析与配置/缓存目录。
+package config
 
 import (
 	"encoding/json"
@@ -15,9 +16,9 @@ type config struct {
 	Workspace string `json:"workspace"`
 }
 
-// resolveWorkspace 按优先级解析工作区：命令行 > 环境变量 > 配置文件。
+// Resolve 按优先级解析工作区：命令行 > 环境变量 > 配置文件。
 // 三者都没有就报错要求显式配置——工具不猜默认路径，也不该把某个人的目录写进源码。
-func resolveWorkspace(flagValue string) (string, error) {
+func Resolve(flagValue string) (string, error) {
 	if flagValue != "" {
 		return filepath.Clean(flagValue), nil
 	}
@@ -73,9 +74,9 @@ func readWorkspaceConfig() (string, bool) {
 	return c.Workspace, true
 }
 
-// appDir 返回用户缓存目录下的 gowork（Windows 是 %LOCALAPPDATA%\gowork，
+// Dir 返回用户缓存目录下的 gowork（Windows 是 %LOCALAPPDATA%\gowork，
 // macOS 是 ~/Library/Caches/gowork，Linux/WSL 是 ~/.cache/gowork），配置与缓存共用。
-func appDir() (string, error) {
+func Dir() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
@@ -88,7 +89,7 @@ func appDir() (string, error) {
 }
 
 func configPath() (string, error) {
-	dir, err := appDir()
+	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}

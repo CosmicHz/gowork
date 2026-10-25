@@ -1,4 +1,4 @@
-package main
+package shell
 
 import (
 	"bytes"
@@ -9,12 +9,12 @@ import (
 	"testing"
 )
 
-func TestInitShell(t *testing.T) {
-	for _, shell := range []string{"powershell", "PowerShell", "pwsh", "sh", "bash", "zsh", "posix", "fish"} {
-		t.Run(shell, func(t *testing.T) {
+func TestInit(t *testing.T) {
+	for _, name := range []string{"powershell", "PowerShell", "pwsh", "sh", "bash", "zsh", "posix", "fish"} {
+		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := initShell([]string{shell}, &out); err != nil {
-				t.Fatalf("initShell(%q) 返回错误：%v", shell, err)
+			if err := Init([]string{name}, &out); err != nil {
+				t.Fatalf("Init(%q) 返回错误：%v", name, err)
 			}
 			script := out.String()
 			for _, want := range []string{"work", "--cwd-file", "GOWORK_BIN"} {
@@ -26,7 +26,7 @@ func TestInitShell(t *testing.T) {
 	}
 }
 
-func TestInitShellErrors(t *testing.T) {
+func TestInitErrors(t *testing.T) {
 	cases := []struct {
 		desc string
 		args []string
@@ -39,16 +39,16 @@ func TestInitShellErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := initShell(c.args, &out); err == nil {
+			if err := Init(c.args, &out); err == nil {
 				t.Fatalf("想要错误，得到 nil；输出：%s", out.String())
 			}
 		})
 	}
 }
 
-// TestInitScriptSyntax 用各 shell 自己的解析器检查生成的代码，没装的 shell 跳过。
+// TestScriptSyntax 用各 shell 自己的解析器检查生成的代码，没装的 shell 跳过。
 // 都只解析、不执行：bash / zsh / dash / fish 用 -n，PowerShell 用 Parser::ParseFile。
-func TestInitScriptSyntax(t *testing.T) {
+func TestScriptSyntax(t *testing.T) {
 	cases := []struct {
 		shell string
 		prog  string
@@ -66,9 +66,9 @@ func TestInitScriptSyntax(t *testing.T) {
 			if _, err := exec.LookPath(c.prog); err != nil {
 				t.Skipf("未安装 %s", c.prog)
 			}
-			script, ok := getInitScript(c.shell)
+			script, ok := template(c.shell)
 			if !ok {
-				t.Fatalf("getInitScript(%q) 没有对应脚本", c.shell)
+				t.Fatalf("template(%q) 没有对应脚本", c.shell)
 			}
 
 			out, err := checkSyntax(t, c.prog, script)

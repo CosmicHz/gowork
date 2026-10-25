@@ -1,4 +1,5 @@
-package main
+// Package render 负责仪表盘的布局、配色与宽度计算。
+package render
 
 import (
 	"fmt"
@@ -11,24 +12,21 @@ import (
 	"unicode"
 
 	"golang.org/x/term"
+
+	"gowork/internal/ansi"
+	"gowork/internal/holiday"
+	"gowork/internal/project"
+	"gowork/internal/sysinfo"
 )
 
-// ANSI 前景色
 const (
-	ansiReset    = "\x1b[0m"
-	ansiDarkGray = "\x1b[90m"
-	ansiWhite    = "\x1b[97m"
-	ansiRed      = "\x1b[91m"
-	ansiGreen    = "\x1b[32m"
-	ansiCyan     = "\x1b[36m"
-	ansiYellow   = "\x1b[33m"
-	ansiMagenta  = "\x1b[35m"
+	maxRuleWidth    = 100
+	rowLabelWidth   = 12
+	recentLimit     = 4
+	recentNameWidth = 35
+	// bannerSuffixGap 是标题后缀与 logo 之间的空格数。
+	bannerSuffixGap = 2
 )
-
-var accentPalette = []string{ansiCyan, ansiGreen, ansiYellow, ansiMagenta}
-
-// bannerSuffixGap 是标题后缀与 logo 之间的空格数。
-const bannerSuffixGap = 2
 
 const bannerArt = `██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗
 ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝
@@ -50,7 +48,15 @@ var quotes = []string{
 	"代码是写给人看的，顺便让机器运行。",
 }
 
-type renderer struct {
+// Options 是渲染所需的命令行配置。
+type Options struct {
+	Indent    int
+	Workspace string
+	NoColor   bool
+}
+
+// Renderer 输出仪表盘；清屏、窗口标题与颜色只在真实终端下启用。
+type Renderer struct {
 	out       io.Writer
 	indent    string
 	width     int
@@ -60,20 +66,22 @@ type renderer struct {
 	workspace string
 }
 
-func newRenderer(o options) *renderer {
-	r := &renderer{
+// New 按终端能力与命令行开关决定宽度、颜色与主色。
+func New(o Options) *Renderer {
+	r := &Renderer{
 		out:       os.Stdout,
-		indent:    strings.Repeat(" ", o.indent),
-		width:     terminalWidth(),
-		workspace: o.workspace,
+		indent:    strings.Repeat(" ", o.Indent),
+		width:     sysinfo.TerminalWidth(),
+		workspace: o.Workspace,
 	}
 	r.tty = term.IsTerminal(int(os.Stdout.Fd()))
-	r.color = colorEnabled(r.tty, o.noColor)
-	r.accent = accentPalette[rand.IntN(len(accentPalette))]
+	r.color = sysinfo.ColorEnabled(r.tty, o.NoColor)
+	r.accent = ansi.Palette[rand.IntN(len(ansi.Palette))]
 	return r
 }
 
-func (r *renderer) render(target string, projects []project, warnings []string) {
+// Render 输出一次完整的仪表盘。
+func (r *Renderer) Render(target string, projects []project.Project, warnings []string) {
 	now := time.Now()
 
 	// 清屏后再输出，否则警告会被一起清掉。
@@ -85,7 +93,7 @@ func (r *renderer) render(target string, projects []project, warnings []string) 
 		if i > 0 {
 			marker = r.indent + "     "
 		}
-		r.println(r.paint(ansiYellow, marker+w))
+		r.println(r.paint(ansi.Yellow, marker+w))
 	}
 	if len(warnings) > 0 {
 		r.println()
@@ -106,48 +114,58 @@ func (r *renderer) render(target string, projects []project, warnings []string) 
 		if name != "" && i == len(art)-2 {
 			need := len(r.indent) + displayWidth(line) + bannerSuffixGap + displayWidth(name)
 			if need <= r.width {
-				entry += strings.Repeat(" ", bannerSuffixGap) + r.paint(ansiWhite, name)
+				entry += strings.Repeat(" ", bannerSuffixGap) + r.paint(ansi.White, name)
 				placed = true
 			}
 		}
 		r.println(entry)
 	}
 	if name != "" && !placed {
-		r.println(r.indent + r.paint(ansiWhite, name))
+		r.println(r.indent + r.paint(ansi.White, name))
 	}
 	r.rule()
 
 	r.println(r.indent + r.paint(r.accent, greeting(now)))
 	r.println()
 
-	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"), ansiWhite)
-	r.row("位置", target, ansiWhite)
-	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), ansiWhite)
+	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"), ansi.White)
+	r.row("位置", target, ansi.White)
+	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), ansi.White)
 
-	if free, ok := diskFreeGB(target); ok {
-		color := ansiWhite
+	if free, ok := sysinfo.DiskFreeGB(target); ok {
+		color := ansi.White
 		if free < 10 {
-			color = ansiRed
+			color = ansi.Red
 		}
 		r.row("磁盘", fmt.Sprintf("%.1f GB 可用", free), color)
 	}
 
-	if branch, changes, ok := gitInfo(target); ok {
+	if branch, changes, ok := project.GitInfo(target); ok {
 		r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.accent)
 	}
 
-	r.row("节日", holidayLine(nextHoliday(now), now), ansiWhite)
+	r.row("节日", holiday.Line(holiday.Next(now), now), ansi.White)
 
 	r.printRecent(projects)
 
 	r.println()
 	r.rule()
-	r.println(r.indent + "  " + r.paint(ansiGreen, quotes[rand.IntN(len(quotes))]))
+	r.println(r.indent + "  " + r.paint(ansi.Green, quotes[rand.IntN(len(quotes))]))
+	r.println()
+}
+
+// CloneNotice 在克隆前清屏并打印地址与目标，让用户知道接下来的 git 输出属于谁。
+func (r *Renderer) CloneNotice(url, dest string) {
+	r.clearScreen()
+	r.println()
+	r.println(r.indent + r.paint(r.accent, "正在克隆仓库"))
+	r.row("地址", url, ansi.White)
+	r.row("目标", dest, ansi.White)
 	r.println()
 }
 
 // clearScreen 清屏并清掉回滚缓冲；输出被重定向时不做任何事，免得往文件里塞转义序列。
-func (r *renderer) clearScreen() {
+func (r *Renderer) clearScreen() {
 	if !r.tty {
 		return
 	}
@@ -155,7 +173,7 @@ func (r *renderer) clearScreen() {
 }
 
 // setTitle 设置终端窗口标题。
-func (r *renderer) setTitle(title string) {
+func (r *Renderer) setTitle(title string) {
 	if !r.tty {
 		return
 	}
@@ -163,25 +181,25 @@ func (r *renderer) setTitle(title string) {
 }
 
 // rule 画分隔线。只限上界：超宽终端下拉满整行会很难看；下界不设，
-func (r *renderer) rule() {
+func (r *Renderer) rule() {
 	n := max(0, min(r.width, maxRuleWidth)-len(r.indent)*2)
-	r.println(r.indent + r.paint(ansiDarkGray, strings.Repeat("─", n)))
+	r.println(r.indent + r.paint(ansi.DarkGray, strings.Repeat("─", n)))
 }
 
 // row 输出一行「标签 + 值」，标签按终端视觉宽度对齐到 rowLabelWidth。
-func (r *renderer) row(label, value, valueColor string) {
+func (r *Renderer) row(label, value, valueColor string) {
 	pad := rowLabelWidth - displayWidth(label)
 	if pad < 0 {
 		pad = 0
 	}
 	r.println(r.indent +
 		r.paint(r.accent, "   ") +
-		r.paint(ansiDarkGray, label) +
+		r.paint(ansi.DarkGray, label) +
 		strings.Repeat(" ", pad) +
 		r.paint(valueColor, value))
 }
 
-func (r *renderer) printRecent(projects []project) {
+func (r *Renderer) printRecent(projects []project.Project) {
 	recent := projects
 	if len(recent) > recentLimit {
 		recent = recent[:recentLimit]
@@ -193,47 +211,24 @@ func (r *renderer) printRecent(projects []project) {
 	r.println()
 	r.println(r.indent + r.paint(r.accent, "  最近活跃"))
 	for i, p := range recent {
-		name := truncateWidth(p.name, recentNameWidth)
+		name := truncateWidth(p.Name, recentNameWidth)
 		pad := recentNameWidth - displayWidth(name) + 1
 		r.println(r.indent +
-			r.paint(ansiDarkGray, fmt.Sprintf("%2d  ", i+1)) +
+			r.paint(ansi.DarkGray, fmt.Sprintf("%2d  ", i+1)) +
 			name + strings.Repeat(" ", pad) +
-			r.paint(ansiDarkGray, p.mod.Format("01-02 15:04")))
+			r.paint(ansi.DarkGray, p.Mod.Format("01-02 15:04")))
 	}
 }
 
-func (r *renderer) println(parts ...string) {
+func (r *Renderer) println(parts ...string) {
 	fmt.Fprintln(r.out, strings.Join(parts, ""))
 }
 
-func (r *renderer) paint(color, s string) string {
+func (r *Renderer) paint(color, s string) string {
 	if !r.color {
 		return s
 	}
-	return color + s + ansiReset
-}
-
-func holidayLine(h holiday, now time.Time) string {
-	if !h.Known {
-		return h.Name + h.Icon
-	}
-
-	days := int(h.Date.Sub(startOfDay(now)) / (24 * time.Hour))
-	var msg string
-	switch {
-	case days == 0:
-		msg = "就是今天！快乐！"
-	case days == 1:
-		msg = "就在明天！"
-	case days <= 3:
-		msg = fmt.Sprintf("还有 %d 天，倒计时开始！", days)
-	default:
-		msg = fmt.Sprintf("还有 %d 天", days)
-	}
-	if h.Days > 0 {
-		msg += fmt.Sprintf("  (放假 %d 天)", h.Days)
-	}
-	return h.Name + h.Icon + "  " + msg
+	return color + s + ansi.Reset
 }
 
 func greeting(now time.Time) string {
@@ -253,10 +248,6 @@ func greeting(now time.Time) string {
 
 func weekdayZH(t time.Time) string {
 	return [...]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"}[t.Weekday()]
-}
-
-func startOfDay(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
 // displayWidth 估算字符串在终端里占的列数：CJK/全角/emoji 记 2 列。

@@ -1,4 +1,5 @@
-package main
+// Package holiday 负责节假日查询、磁盘缓存与仪表盘文案。
+package holiday
 
 import (
 	"encoding/json"
@@ -11,15 +12,17 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gowork/internal/config"
 )
 
 const holidayAPI = "https://uapis.cn/api/v1/misc/holiday-calendar"
 
-// holidayCacheVersion 变更数据源或缓存结构时递增；版本不匹配的缓存直接丢弃。
-const holidayCacheVersion = 4
+// cacheVersion 变更数据源或缓存结构时递增；版本不匹配的缓存直接丢弃。
+const cacheVersion = 4
 
-// holiday 是一次查询的结果；Known 为 false 时表示数据不可用。
-type holiday struct {
+// Holiday 是一次查询的结果；Known 为 false 时表示数据不可用。
+type Holiday struct {
 	Known bool
 	Date  time.Time
 	Name  string
@@ -68,30 +71,54 @@ type cachedHolidayEvent struct {
 	Type string `json:"type"` // rest（法定放假）或 festival（公历/农历节日）
 }
 
-// nextHoliday 返回下一个放假日或节日：先从缓存里的节日记录中挑，全部过期后才请求接口。
+// Next 返回下一个放假日或节日：先从缓存里的节日记录中挑，全部过期后才请求接口。
 // 查询失败不写缓存，下次运行仍会重试。
-func nextHoliday(now time.Time) holiday {
-	if h, ok := readHolidayCache(now); ok {
+func Next(now time.Time) Holiday {
+	if h, ok := readCache(now); ok {
 		return h
 	}
-	resp, err := fetchHoliday(now)
+	resp, err := fetch(now)
 	if err != nil {
-		return holiday{Name: "数据获取失败", Icon: "⚠️"}
+		return Holiday{Name: "数据获取失败", Icon: "⚠️"}
 	}
 	h, err := parseHoliday(resp, now)
 	if err != nil {
-		return holiday{Name: "数据获取失败", Icon: "⚠️"}
+		return Holiday{Name: "数据获取失败", Icon: "⚠️"}
 	}
-	writeHolidayCache(resp)
+	writeCache(resp)
 	return h
 }
 
-// fetchHoliday 按天查询今天的万年历和节日，一次请求拿回当天与前后两段节日。
+// Line 把查询结果渲染成仪表盘「节日」行的一句话。
+func Line(h Holiday, now time.Time) string {
+	if !h.Known {
+		return h.Name + h.Icon
+	}
+
+	days := int(h.Date.Sub(startOfDay(now)) / (24 * time.Hour))
+	var msg string
+	switch {
+	case days == 0:
+		msg = "就是今天！快乐！"
+	case days == 1:
+		msg = "就在明天！"
+	case days <= 3:
+		msg = fmt.Sprintf("还有 %d 天，倒计时开始！", days)
+	default:
+		msg = fmt.Sprintf("还有 %d 天", days)
+	}
+	if h.Days > 0 {
+		msg += fmt.Sprintf("  (放假 %d 天)", h.Days)
+	}
+	return h.Name + h.Icon + "  " + msg
+}
+
+// fetch 按天查询今天的万年历和节日，一次请求拿回当天与前后两段节日。
 // 取到的节日包含公历、农历节日和节气。
 // API 接受一个 exclude_past 参数，文档写的是“过滤今天之前已经过去的节日”，
 // 但是我们不传，因为它所谓的“今天”是服务器时间，不是我们传的 date，传的话可能导致困惑，
 // 特此记录。
-func fetchHoliday(now time.Time) (holidayResponse, error) {
+func fetch(now time.Time) (holidayResponse, error) {
 	q := url.Values{}
 	q.Set("date", now.Format("2006-01-02"))
 	q.Set("holiday_type", "all")
@@ -119,7 +146,7 @@ func fetchHoliday(now time.Time) (holidayResponse, error) {
 // parseHoliday 从按天查询的结果里挑出今天或之后的节日。
 // 优先取法定节假日（legal_rest）并统计整段放假天数；法定排期还没公布时，
 // 退回最近的一个公历/农历节日，只是没有放假天数可报。节气不算节日。
-func parseHoliday(r holidayResponse, now time.Time) (holiday, error) {
+func parseHoliday(r holidayResponse, now time.Time) (Holiday, error) {
 	rest, festivals := eventMaps(collectEvents(r))
 	return selectHoliday(rest, festivals, now)
 }
@@ -183,11 +210,11 @@ func eventMaps(events []cachedHolidayEvent) (rest, festivals map[string]string) 
 }
 
 // selectHoliday 在两张日期表里挑出今天或之后最近的一个，并算出放假天数。
-func selectHoliday(rest, festivals map[string]string, now time.Time) (holiday, error) {
+func selectHoliday(rest, festivals map[string]string, now time.Time) (Holiday, error) {
 	today := startOfDay(now)
 
 	if start, name := earliestFrom(rest, today); name != "" {
-		return holiday{
+		return Holiday{
 			Known: true,
 			Date:  start,
 			Name:  name,
@@ -196,14 +223,14 @@ func selectHoliday(rest, festivals map[string]string, now time.Time) (holiday, e
 		}, nil
 	}
 	if start, name := earliestFrom(festivals, today); name != "" {
-		return holiday{
+		return Holiday{
 			Known: true,
 			Date:  start,
 			Name:  name,
 			Icon:  holidayIcon(name),
 		}, nil
 	}
-	return holiday{}, errors.New("接口没有可用的节日")
+	return Holiday{}, errors.New("接口没有可用的节日")
 }
 
 // firstNames 返回第一个非空名字。
@@ -253,42 +280,42 @@ func restRun(rest map[string]string, start time.Time) int {
 	}
 }
 
-// readHolidayCache 用缓存里整理好的记录重新挑选。缓存里还有未来的节日就复用，
+// readCache 用缓存里整理好的记录重新挑选。缓存里还有未来的节日就复用，
 // 全部过去之后（挑不出结果）才返回 false，让调用方重新请求。
-func readHolidayCache(now time.Time) (holiday, bool) {
-	path, err := holidayCachePath()
+func readCache(now time.Time) (Holiday, bool) {
+	path, err := cachePath()
 	if err != nil {
-		return holiday{}, false
+		return Holiday{}, false
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return holiday{}, false
+		return Holiday{}, false
 	}
 
 	var c holidayCache
 	if err := json.Unmarshal(raw, &c); err != nil {
-		return holiday{}, false
+		return Holiday{}, false
 	}
-	if c.Version != holidayCacheVersion {
-		return holiday{}, false
+	if c.Version != cacheVersion {
+		return Holiday{}, false
 	}
 
 	rest, festivals := eventMaps(c.Events)
 	h, err := selectHoliday(rest, festivals, now)
 	if err != nil {
-		return holiday{}, false
+		return Holiday{}, false
 	}
 	return h, true
 }
 
-// writeHolidayCache 把接口返回整理成记录列表后落盘，不保留原始响应。
-func writeHolidayCache(r holidayResponse) {
-	path, err := holidayCachePath()
+// writeCache 把接口返回整理成记录列表后落盘，不保留原始响应。
+func writeCache(r holidayResponse) {
+	path, err := cachePath()
 	if err != nil {
 		return
 	}
 	c := holidayCache{
-		Version: holidayCacheVersion,
+		Version: cacheVersion,
 		Events:  collectEvents(r),
 	}
 	raw, err := json.Marshal(c)
@@ -298,12 +325,17 @@ func writeHolidayCache(r holidayResponse) {
 	_ = os.WriteFile(path, raw, 0o644)
 }
 
-func holidayCachePath() (string, error) {
-	dir, err := appDir()
+func cachePath() (string, error) {
+	dir, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "holiday-cache.json"), nil
+}
+
+// startOfDay 把时间截到当天 0 点，日期差按自然日计算。
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
 func holidayIcon(name string) string {

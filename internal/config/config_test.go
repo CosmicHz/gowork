@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-func TestResolveWorkspacePriority(t *testing.T) {
+func TestResolvePriority(t *testing.T) {
 	envWS := filepath.Join(t.TempDir(), "env-ws")
 	flagWS := filepath.Join(t.TempDir(), "flag-ws")
 	t.Setenv(workspaceEnv, envWS)
 
-	got, err := resolveWorkspace(flagWS)
+	got, err := Resolve(flagWS)
 	if err != nil {
 		t.Fatalf("命令行指定时不该报错：%v", err)
 	}
@@ -21,7 +21,7 @@ func TestResolveWorkspacePriority(t *testing.T) {
 		t.Errorf("命令行应最优先：got %q, 想要 %q", got, want)
 	}
 
-	got, err = resolveWorkspace("")
+	got, err = Resolve("")
 	if err != nil {
 		t.Fatalf("环境变量已设置时不该报错：%v", err)
 	}
@@ -30,7 +30,7 @@ func TestResolveWorkspacePriority(t *testing.T) {
 	}
 }
 
-func TestResolveWorkspaceUnconfigured(t *testing.T) {
+func TestResolveUnconfigured(t *testing.T) {
 	// 把各类缓存目录都指到临时位置，避免读到本机真实配置。
 	t.Setenv(workspaceEnv, "")
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
@@ -45,7 +45,7 @@ func TestResolveWorkspaceUnconfigured(t *testing.T) {
 		}
 	}
 
-	_, err := resolveWorkspace("")
+	_, err := Resolve("")
 	if err == nil {
 		t.Fatal("没有配置时应报错")
 	}
@@ -54,7 +54,7 @@ func TestResolveWorkspaceUnconfigured(t *testing.T) {
 	}
 }
 
-func TestConfigHintsMatchPlatform(t *testing.T) {
+func TestHintsMatchPlatform(t *testing.T) {
 	env := envHint()
 	if !strings.Contains(env, workspaceEnv) {
 		t.Errorf("envHint 应包含 %s：%q", workspaceEnv, env)

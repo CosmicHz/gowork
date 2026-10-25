@@ -70,7 +70,7 @@ fi
 need go
 mkdir -p "$bin_dir" || die "无法创建安装目录：$bin_dir"
 printf '构建 %s/gowork\n' "$bin_dir"
-(cd "$src_dir" && go build -trimpath -o "$bin_dir/gowork" .) || die "构建失败"
+(cd "$src_dir" && go build -trimpath -o "$bin_dir/gowork" ./cmd/gowork) || die "构建失败"
 
 printf '\n已安装：%s/gowork\n' "$bin_dir"
 

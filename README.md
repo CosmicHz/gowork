@@ -67,7 +67,7 @@ git clone https://github.com/CosmicHz/gowork.git
 cd gowork
 
 # 1. 构建（产物落在 bin\gowork.exe）
-go build -o bin\gowork.exe .
+go build -o bin\gowork.exe .\cmd\gowork
 
 # 2. 把 bin 目录加进用户级 PATH
 [Environment]::SetEnvironmentVariable('Path',
@@ -92,7 +92,7 @@ cd gowork
 
 # 1. 直接构建到 PATH 上的目录
 mkdir -p ~/.local/bin
-go build -o ~/.local/bin/gowork .
+go build -o ~/.local/bin/gowork ./cmd/gowork
 
 # 2. 把 PATH 与 shell 集成写进配置。下面以 zsh 为例，bash 换成 ~/.bashrc
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
@@ -294,20 +294,26 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 ## 目录结构
 
-| 文件 | 职责 |
-| --- | --- |
-| `main.go` | 入口、参数解析、编排 |
-| `config.go` | 工作区解析与环境变量 / 配置文件读取 |
-| `projects.go` | 扫描工作区、`-N` 索引、前缀匹配、git 状态 |
-| `render.go` | 仪表盘渲染、ANSI 配色、按显示宽度对齐 |
-| `holiday.go` | 节假日查询与磁盘缓存 |
-| `clone.go` | 仓库地址识别、克隆 |
-| `sysinfo.go` | 跨平台部分：终端宽度、错误输出 |
-| `sysinfo_windows.go` | Windows：控制台的 ANSI 解析与 UTF-8 代码页、卷可用空间 |
-| `sysinfo_posix.go` | macOS / Linux：`statfs` 可用空间；ANSI 解析无需额外开启 |
-| `init.go` | `gowork init`：生成各 shell 的集成代码 |
-| `install.sh` | macOS / Linux 安装脚本：构建并放到 PATH 目录 |
-| `install.ps1` | Windows 安装脚本，同上 |
+```text
+gowork/
+├── cmd/gowork/          入口，只把 os.Args 交给 internal/cli
+├── internal/
+│   ├── ansi/            ANSI 前景色常量与主色调色板
+│   ├── cli/             参数解析、裸 -N 改写、编排与退出码
+│   ├── config/          工作区解析、配置文件与缓存目录
+│   ├── project/         扫描工作区、-N 索引、前缀匹配、git 状态
+│   ├── render/          仪表盘渲染、宽度对齐、克隆提示
+│   ├── holiday/         节假日查询、缓存与「节日」行文案
+│   ├── clone/           仓库地址识别、仓库名推断、git clone
+│   ├── shell/           gowork init 的三份 shell 集成模板
+│   └── sysinfo/         终端宽度、颜色开关、失败输出、VT 与磁盘空间
+├── install.sh           macOS / Linux 安装脚本：构建并放到 PATH 目录
+├── install.ps1          Windows 安装脚本，同上
+└── .github/workflows/   CI 与发布
+```
+
+平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；
+其余包与平台无关，可在任意平台 `go test`。
 
 ## 开发
 
@@ -317,11 +323,11 @@ go vet ./...    # 静态检查
 go test ./...   # 单元测试（macOS / Linux 上可直接跑）
 
 # 交叉编译
-GOOS=windows GOARCH=amd64 go build -o bin/gowork.exe .
-GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 .
+GOOS=windows GOARCH=amd64 go build -o bin/gowork.exe ./cmd/gowork
+GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 ./cmd/gowork
 ```
 
-平台相关的只有 `enableVT` 与 `diskFreeGB` 两个函数，用构建标签隔开；其余逻辑与平台无关，
+平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；其余包与平台无关，
 所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-N` 索引、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
 
@@ -348,7 +354,7 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
 
 ## 已知限制
 
-- **字符宽度**：`render.go` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的
+- **字符宽度**：`internal/render` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的
   真实 Unicode 类别判断，宽字符区段手工列举，歧义宽度一律按 1 列——它本就取决于终端配置。
   只服务行标签补白与「最近活跃」名字列两处对齐。
 - **节假日数据源**：`uapis.cn` 的[万年历接口](https://uapis.cn/docs/api-reference/get-misc-holiday-calendar)。

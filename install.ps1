@@ -48,7 +48,7 @@ try {
     Write-Host "构建 $exe"
     Push-Location $srcDir
     try {
-        go build -trimpath -o $exe .
+        go build -trimpath -o $exe .\cmd\gowork
         if ($LASTEXITCODE -ne 0) { Fail '构建失败' }
     }
     finally {

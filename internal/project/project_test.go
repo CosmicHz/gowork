@@ -1,4 +1,4 @@
-package main
+package project
 
 import (
 	"os"
@@ -18,29 +18,29 @@ func mkdirs(t *testing.T, root string, names ...string) {
 	}
 }
 
-func projectNames(ps []project) []string {
+func projectNames(ps []Project) []string {
 	names := make([]string, len(ps))
 	for i, p := range ps {
-		names[i] = p.name
+		names[i] = p.Name
 	}
 	return names
 }
 
-func TestListProjectsSkipsHiddenAndFiles(t *testing.T) {
+func TestListSkipsHiddenAndFiles(t *testing.T) {
 	root := t.TempDir()
 	mkdirs(t, root, "alpha", "beta", ".hidden")
 	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	got := projectNames(listProjects(root))
+	got := projectNames(List(root))
 	slices.Sort(got)
 	if want := []string{"alpha", "beta"}; !slices.Equal(got, want) {
-		t.Errorf("listProjects = %v, 想要 %v", got, want)
+		t.Errorf("List = %v, 想要 %v", got, want)
 	}
 }
 
-func TestListProjectsSortsByModTimeDesc(t *testing.T) {
+func TestListSortsByModTimeDesc(t *testing.T) {
 	root := t.TempDir()
 	mkdirs(t, root, "old", "mid", "new")
 
@@ -52,18 +52,18 @@ func TestListProjectsSortsByModTimeDesc(t *testing.T) {
 		}
 	}
 
-	if got, want := projectNames(listProjects(root)), []string{"new", "mid", "old"}; !slices.Equal(got, want) {
-		t.Errorf("listProjects 顺序 = %v, 想要 %v", got, want)
+	if got, want := projectNames(List(root)), []string{"new", "mid", "old"}; !slices.Equal(got, want) {
+		t.Errorf("List 顺序 = %v, 想要 %v", got, want)
 	}
 }
 
-func TestListProjectsMissingRoot(t *testing.T) {
-	if got := listProjects(filepath.Join(t.TempDir(), "不存在")); got != nil {
+func TestListMissingRoot(t *testing.T) {
+	if got := List(filepath.Join(t.TempDir(), "不存在")); got != nil {
 		t.Errorf("工作区不存在时应返回 nil，得到 %v", got)
 	}
 }
 
-func TestListProjectsFollowsDirLink(t *testing.T) {
+func TestListFollowsDirLink(t *testing.T) {
 	root := t.TempDir()
 	real := filepath.Join(t.TempDir(), "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
@@ -71,15 +71,15 @@ func TestListProjectsFollowsDirLink(t *testing.T) {
 	}
 
 	linkDir(t, real, filepath.Join(root, "link"))
-	if got, want := projectNames(listProjects(root)), []string{"link"}; !slices.Equal(got, want) {
+	if got, want := projectNames(List(root)), []string{"link"}; !slices.Equal(got, want) {
 		t.Errorf("指向目录的链接应算项目，得到 %v", got)
 	}
 }
 
-func TestResolveTarget(t *testing.T) {
+func TestResolve(t *testing.T) {
 	ws := t.TempDir()
 	mkdirs(t, ws, "my-app", "my-service", "other")
-	projects := listProjects(ws)
+	projects := List(ws)
 
 	cases := []struct {
 		desc    string
@@ -98,7 +98,7 @@ func TestResolveTarget(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			target, warns, err := resolveTarget(ws, c.want, projects)
+			target, warns, err := Resolve(ws, c.want, projects)
 			if c.wantErr {
 				if err == nil {
 					t.Fatal("想要错误，得到 nil")
@@ -118,21 +118,21 @@ func TestResolveTarget(t *testing.T) {
 	}
 }
 
-func TestResolveTargetIndex(t *testing.T) {
+func TestResolveIndex(t *testing.T) {
 	ws := t.TempDir()
 	mkdirs(t, ws, "a", "b", "c")
-	projects := listProjects(ws)
+	projects := List(ws)
 
-	target, _, err := resolveTarget(ws, "-1", projects)
+	target, _, err := Resolve(ws, "-1", projects)
 	if err != nil {
 		t.Fatalf("意外错误：%v", err)
 	}
-	if want := filepath.Join(ws, projects[0].name); target != want {
+	if want := filepath.Join(ws, projects[0].Name); target != want {
 		t.Errorf("-1 = %q, 想要 %q", target, want)
 	}
 
 	for _, bad := range []string{"-0", "-4", "-99"} {
-		if _, _, err := resolveTarget(ws, bad, projects); err == nil {
+		if _, _, err := Resolve(ws, bad, projects); err == nil {
 			t.Errorf("%s 应报越界，得到 nil", bad)
 		}
 	}
@@ -144,21 +144,21 @@ func TestGitInfo(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if _, _, ok := gitInfo(dir); ok {
+	if _, _, ok := GitInfo(dir); ok {
 		t.Error("非 git 目录不该返回 ok")
 	}
 
 	runGit(t, dir, "init")
 	runGit(t, dir, "add", "-A")
 
-	if _, changes, ok := gitInfo(dir); !ok || changes != 0 {
+	if _, changes, ok := GitInfo(dir); !ok || changes != 0 {
 		t.Errorf("空仓库 changes = %d, ok = %v, 想要 0/true", changes, ok)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	branch, changes, ok := gitInfo(dir)
+	branch, changes, ok := GitInfo(dir)
 	if !ok || branch == "" {
 		t.Fatalf("ok = %v, branch = %q", ok, branch)
 	}
