@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            printf '未格式化的文件：\n%s\n' "$out"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - name: 安装测试用的 shell
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y fish zsh dash
+              ;;
+            macOS)
+              brew install fish
+              ;;
+            *)
+              echo 'Windows 自带的 PowerShell 5.1 / 7 与 Git Bash 已够用'
+              ;;
+          esac
+
+      # 测试遇到缺失的 shell 会 t.Skip，普通输出里看不出来。
+      # CI 里先把该平台应有的解释器逐个确认一遍，装失败就直接红。
+      - name: 确认所需 shell 都已就位
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) needed='bash zsh dash fish pwsh' ;;
+            macOS) needed='bash zsh fish pwsh' ;;
+          esac
+
+          missing=0
+          for s in $needed; do
+            if command -v "$s" >/dev/null 2>&1; then
+              printf '✓ %s\n' "$s"
+            else
+              printf '::error::缺少 %s，CI 环境不完整\n' "$s"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: 确认所需 shell 都已就位（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $missing = $false
+          foreach ($s in 'bash', 'pwsh', 'powershell') {
+            if (Get-Command $s -ErrorAction SilentlyContinue) {
+              Write-Host "✓ $s"
+            }
+            else {
+              Write-Host "::error::缺少 $s，CI 环境不完整"
+              $missing = $true
+            }
+          }
+          if ($missing) { exit 1 }
+
+      - name: 测试
+        run: go run gotest.tools/gotestsum@v1.13.0 --format=testname -- -count=1 ./...
