@@ -63,18 +63,16 @@ func TestListProjectsMissingRoot(t *testing.T) {
 	}
 }
 
-func TestListProjectsFollowsDirSymlink(t *testing.T) {
+func TestListProjectsFollowsDirLink(t *testing.T) {
 	root := t.TempDir()
 	real := filepath.Join(t.TempDir(), "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
-		t.Skipf("本平台建不了符号链接：%v", err)
-	}
+	linkDir(t, real, filepath.Join(root, "link"))
 	if got, want := projectNames(listProjects(root)), []string{"link"}; !slices.Equal(got, want) {
-		t.Errorf("指向目录的符号链接应算项目，得到 %v", got)
+		t.Errorf("指向目录的链接应算项目，得到 %v", got)
 	}
 }
 
