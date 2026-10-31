@@ -145,6 +145,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   绕开 PowerShell 输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
   参数逐个人工加引号后再拼命令行；从 `--cwd-file` 读取目标并 `Set-Location`；
   找不到二进制时 `Write-Error` 并把 `$LASTEXITCODE` 设为 127。
+  模板（含注释与提示语）必须保持纯 ASCII，原因见坑 1。
 - 二进制查找：`GOWORK_BIN` 优先，否则 PATH 上的 `gowork`。
 - 集成代码由二进制生成，升级 gowork 后无需重新配置 shell。
 
@@ -203,6 +204,10 @@ go test ./...
 1. **PowerShell 从 stdin 读脚本会按控制台代码页解码**。GBK 代码页下 UTF-8 中文注释被解坏，
    换行被吞、行号错位，`ParseInput` 会报假的 `Unexpected token '}'`。
    修法：写 UTF-8 带 BOM 的临时文件，用 `Parser::ParseFile`。与 PowerShell 5.1 / 7 无关。
+   同一根因还有第二处：`gowork init powershell` 的输出经过管道（`| Out-String`）时，pwsh
+   也按控制台代码页解码，中文会吞掉换行，把 `function global:work {` 并进注释，profile 里的
+   `Invoke-Expression` 报 `Unexpected token '}'`。所以这份模板的注释与提示语必须保持纯 ASCII，
+   `TestPowerShellTemplateIsASCII` 会拦；其余 shell 的模板不经过这层解码，不受影响。
 2. **Windows 建符号链接需要特权**。普通用户默认没有 `SeCreateSymbolicLinkPrivilege`；
    管理员进程里该特权也常是 Disabled；开发者模式的免提权标志也可能不生效。
    测试先直接建，失败则启用 `SeCreateSymbolicLinkPrivilege` 重试，仍不行就 skip，
@@ -231,6 +236,7 @@ go test ./...
 ## 改动时的连带点
 
 - 加 shell：`internal/shell/shell.go` 的 switch、模板、`shell_test.go` 用例、CI 安装与预检、README 的平台说明。
+  PowerShell 系模板的输出必须纯 ASCII（`TestPowerShellTemplateIsASCII` 会拦），原因见坑 1。
 - 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
   其余逻辑必须能在任意平台 `go test`。
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。

@@ -46,6 +46,21 @@ func TestInitErrors(t *testing.T) {
 	}
 }
 
+// TestPowerShellTemplateIsASCII 锁定 PowerShell 模板不含非 ASCII 字符。
+// pwsh 会按控制台代码页解码 `gowork init powershell` 的输出（中文系统常见 GBK/936），
+// UTF-8 中文会被解坏并吞掉换行/引号，让 profile 里的 Invoke-Expression 报假的语法错误。
+func TestPowerShellTemplateIsASCII(t *testing.T) {
+	s, ok := template("powershell")
+	if !ok {
+		t.Fatal("缺少 powershell 模板")
+	}
+	for i, r := range s {
+		if r > 0x7f {
+			t.Fatalf("PowerShell 模板在字节 %d 含非 ASCII 字符 %q（U+%04X），请改用英文注释与提示语", i, r, r)
+		}
+	}
+}
+
 // TestScriptSyntax 用各 shell 自己的解析器检查生成的代码，没装的 shell 跳过。
 // 都只解析、不执行：bash / zsh / dash / fish 用 -n，PowerShell 用 Parser::ParseFile。
 func TestScriptSyntax(t *testing.T) {

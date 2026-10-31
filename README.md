@@ -348,6 +348,8 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
 - `powershell`：函数用 `Start-Process -NoNewWindow` 让 `gowork.exe` 直接接管当前控制台。
   这样绕开了 PowerShell 的输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
   输出直接落在主机上、不进管道，所以 `$x = work` 捕获不到仪表盘。
+  生成的代码保持纯 ASCII：pwsh 会按控制台代码页解码 `gowork init powershell` 的管道输出，
+  中文在 GBK 环境下会被解坏并吞掉换行。
 - `sh` 与 `fish`：生成一个**函数**，以便修改父 shell 的目录。
   gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，
   因此清屏、窗口标题和颜色才会生效。
