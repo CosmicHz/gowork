@@ -40,8 +40,6 @@ shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / zsh / 
 
 ### 一键安装
 
-脚本会构建二进制、放进默认目录，然后打印需要添加的那一行；它们不改 PATH，也不改 shell 配置。
-
 Windows（PowerShell 7）：
 
 ```powershell
@@ -54,59 +52,183 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh | sh
 ```
 
-默认安装到 `%LOCALAPPDATA%\gowork\bin`（Windows）与 `~/.local/bin`（macOS / Linux），
-可以用 `-BinDir` / `--bin-dir` 改。需要 Go 1.26.5 或更新。
+脚本会：
 
-### 手动安装
+1. 下载**最新正式 release** 的预编译二进制，并用 release 里的 `checksums.txt` 校验 sha256；
+2. 装进用户目录；
+3. 把该目录加入用户 PATH，并把 `work` 集成写进当前 shell 的配置。
 
-Windows（PowerShell 7）:
+重复执行会覆盖升级，已配置过的 PATH 与 shell 集成不会重复追加。
+
+#### 带参数运行
+
+需要指定安装目录、安装预发布版本、只装二进制或从源码构建时，先把脚本下载下来再执行：
+
+Windows：
 
 ```powershell
-# 0. 克隆
+irm https://raw.githubusercontent.com/CosmicHz/gowork/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -PreRelease
+Remove-Item .\install.ps1
+```
+
+macOS / Linux：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh -o install.sh
+sh install.sh --pre-release
+rm install.sh
+```
+
+| 目的 | Windows | macOS / Linux |
+| --- | --- | --- |
+| 安装到指定目录 | `-BinDir <路径>` | `--bin-dir <路径>` |
+| 安装最新预发布版本 | `-PreRelease` | `--pre-release` |
+| 只装二进制，不改环境 | `-NoModify` | `--no-modify` |
+| 从源码构建 | `-FromSource` | `--from-source` |
+
+不指定 `-BinDir` / `--bin-dir` 时，默认安装到 `%LOCALAPPDATA%\gowork\bin`（Windows）与
+`~/.local/bin`（macOS / Linux）。自动修改的位置：
+
+| 环境 | 修改 |
+| --- | --- |
+| zsh | `~/.zshrc` |
+| bash | `~/.bashrc`（macOS 为 `~/.bash_profile`） |
+| fish | `~/.config/fish/config.fish` |
+| Windows | 用户 PATH + `$PROFILE` |
+
+追加的内容包在 `# >>> gowork installer >>>` 标记里，想撤销时删掉整块即可。
+预编译产物覆盖 Windows / macOS / Linux 的 amd64 与 arm64；其他平台或想从源码构建，
+见[从源码构建](#从源码构建两种方式)。
+
+### 手动安装（下载 release）
+
+在 [Releases](https://github.com/CosmicHz/gowork/releases) 页下载对应系统的产物：
+
+- macOS / Linux：`gowork_<版本>_<darwin|linux>_<amd64|arm64>.tar.gz`
+- Windows：`gowork_<版本>_windows_<amd64|arm64>.zip`
+
+同页的 `checksums.txt` 可以校验下载（可选），把 `0.1.0` 换成实际版本：
+
+Windows：
+
+```powershell
+$ver = '0.1.0'
+Get-FileHash ".\gowork_${ver}_windows_amd64.zip" -Algorithm SHA256
+```
+
+macOS：
+
+```sh
+ver="0.1.0"
+shasum -a 256 "gowork_${ver}_darwin_arm64.tar.gz"   # Intel 用 darwin_amd64
+```
+
+Linux：
+
+```sh
+ver="0.1.0"
+sha256sum "gowork_${ver}_linux_amd64.tar.gz"
+```
+
+把输出的哈希与 `checksums.txt` 里对应文件的 sha256 比对即可。
+
+解压后把二进制放到用户目录：
+
+Windows：
+
+```powershell
+$ver = '0.1.0'
+Expand-Archive ".\gowork_${ver}_windows_amd64.zip" -DestinationPath .
+New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\gowork\bin" | Out-Null
+Copy-Item ".\gowork_${ver}_windows_amd64\gowork.exe" "$env:LOCALAPPDATA\gowork\bin\gowork.exe"
+```
+
+macOS：
+
+```sh
+ver="0.1.0"
+tar -xzf "gowork_${ver}_darwin_arm64.tar.gz"   # Intel 用 darwin_amd64
+mkdir -p ~/.local/bin
+cp "gowork_${ver}_darwin_arm64/gowork" ~/.local/bin/gowork
+chmod +x ~/.local/bin/gowork
+```
+
+Linux：
+
+```sh
+ver="0.1.0"
+tar -xzf "gowork_${ver}_linux_amd64.tar.gz"
+mkdir -p ~/.local/bin
+cp "gowork_${ver}_linux_amd64/gowork" ~/.local/bin/gowork
+chmod +x ~/.local/bin/gowork
+```
+
+然后手动把目录加入 PATH、写入 shell 集成（下面以 PowerShell 与 zsh 为例）：
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path',
+  [Environment]::GetEnvironmentVariable('Path','User') + ';' + "$env:LOCALAPPDATA\gowork\bin", 'User')
+# 在 $PROFILE 末尾加：
+Invoke-Expression (& { (gowork init powershell | Out-String) })
+```
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(gowork init sh)"' >> ~/.zshrc
+```
+
+fish 用户改用 `fish_add_path ~/.local/bin` 和 `gowork init fish | source`。
+
+### 从源码构建（两种方式）
+
+需要 Go 1.26.5 或更新。
+
+#### 方式一：手动构建
+
+Windows：
+
+```powershell
 git clone https://github.com/CosmicHz/gowork.git
 cd gowork
-
-# 1. 构建（产物落在 bin\gowork.exe）
+New-Item -ItemType Directory -Force -Path bin | Out-Null
 go build -o bin\gowork.exe .\cmd\gowork
 
-# 2. 把 bin 目录加进用户级 PATH
+# 把 bin 目录加入用户 PATH
 [Environment]::SetEnvironmentVariable('Path',
   [Environment]::GetEnvironmentVariable('Path','User') + ';' + (Join-Path $PWD 'bin'), 'User')
 
-# 3. 配置工作区（三选一，见下节）
-[Environment]::SetEnvironmentVariable('GOWORK_WORKSPACE', 'C:\Projects', 'User')
-
-# 4. 把这一行加到 $PROFILE 末尾（echo $profile 可查看路径）：
+# 在 $PROFILE 末尾加：
 Invoke-Expression (& { (gowork init powershell | Out-String) })
-
-# 5. 重启终端后
-work
 ```
 
-macOS / Linux :
+macOS / Linux：
 
 ```sh
-# 0. 克隆
 git clone https://github.com/CosmicHz/gowork.git
 cd gowork
-
-# 1. 直接构建到 PATH 上的目录
 mkdir -p ~/.local/bin
 go build -o ~/.local/bin/gowork ./cmd/gowork
 
-# 2. 把 PATH 与 shell 集成写进配置。下面以 zsh 为例，bash 换成 ~/.bashrc
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 echo 'eval "$(gowork init sh)"' >> ~/.zshrc
+```
 
-# fish 用户改用：
-#   fish_add_path ~/.local/bin
-#   echo 'gowork init fish | source' >> ~/.config/fish/config.fish
+#### 方式二：用安装脚本构建
 
-# 3. 配置工作区（三选一，见下节）
-echo 'export GOWORK_WORKSPACE="$HOME/Projects"' >> ~/.zshrc
+`-FromSource` / `--from-source` 不会下载 release：在仓库内用当前代码构建，否则浅克隆仓库；
+仍然会自动配置 PATH 与 shell 集成（`-NoModify` / `--no-modify` 可跳过）。
 
-# 4. 重开终端后
-work
+```powershell
+irm https://raw.githubusercontent.com/CosmicHz/gowork/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -FromSource
+Remove-Item .\install.ps1
+```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh -o install.sh
+sh install.sh --from-source
+rm install.sh
 ```
 
 `gowork init <shell>` 输出的函数会在 PATH 上找 `gowork`；不想放进 PATH 时，把

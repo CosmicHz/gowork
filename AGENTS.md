@@ -151,14 +151,30 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 安装脚本
 
-- `install.sh` / `install.ps1`：若当前目录是本仓库（`go.mod` 里 `module gowork`）就直接
-  构建，否则 `git clone --depth 1` 到临时目录再构建；构建目标是 `./cmd/gowork`。
+- 默认流程：从最新正式 release 下载对应平台产物（`gowork_<版本>_<系统>_<架构>.tar.gz` / `.zip`），
+  用 `checksums.txt` 校验 sha256，解压后原子替换二进制；随后修改 PATH 与 shell 集成。
+  `--from-source` / `-FromSource` 才走源码构建（当前目录是本仓库就直接构建，否则浅克隆，
+  构建目标 `./cmd/gowork`）。
+- 平台映射：`uname -s` 的 Linux / Darwin，`uname -m` 的 x86_64 / aarch64；Windows 读
+  `PROCESSOR_ARCHITECTURE`（优先 `PROCESSOR_ARCHITEW6432`）。其他系统或架构报错并提示源码构建。
+- release 选择：默认 `/releases/latest`（只返回正式版，draft 与预发布都被跳过）；
+  `--pre-release` / `-PreRelease` 时改用 `/releases` 列表第一条（未认证列表不含 draft，
+  但包含预发布）。默认路径没有正式版时报错并提示加 `--pre-release`。发布只上传版本化文件名，
+  所以资产名靠 tag 拼出来；`release.yml` 按 tag 里的 `-` 自动设置 `prerelease`。
 - 默认目录：`~/.local/bin`（macOS / Linux）、`%LOCALAPPDATA%\gowork\bin`（Windows）；
-  `--bin-dir` / `-BinDir` 可改，shell 脚本还认 `GOWORK_BIN_DIR`。
-- 只打印 PATH 提示与 init 那一行，不改 PATH、不改 `$PROFILE`。
+  `--bin-dir` / `-BinDir` 可改，shell 脚本还认 `GOWORK_BIN_DIR`。`--no-modify` / `-NoModify`
+  只装二进制，跳过下面所有环境修改。
+- PATH 与集成（POSIX）：按 `$SHELL` 选 rc——zsh `~/.zshrc`、bash `~/.bashrc`（macOS 为
+  `~/.bash_profile`）、fish `${XDG_CONFIG_HOME:-~/.config}/fish/config.fish`、sh/dash `~/.profile`；
+  识别不了就只打印手动步骤。写入块以 `# >>> gowork installer >>>` 标记，已有标记就整体跳过；
+  目录已在 `$PATH` 或 rc 里出现时不重复追加；写入前 `mkdir -p` 父目录。
+- PATH 与集成（Windows）：用 `[Environment]::SetEnvironmentVariable('Path', ..., 'User')` 追加
+  用户 PATH（不用 `setx`，避开长度截断），同时更新当前进程 `$env:Path`；`$PROFILE` 追加纯 ASCII
+  集成块。profile 是 UTF-16 时不自动写，改为打印手动步骤，避免混合编码。
+- 自动配置失败只警告并打印手动步骤，不影响二进制安装；重复执行是幂等的。
 - PowerShell 里用 `throw` 而不是 `exit`：脚本常以 `irm ... | iex` 形式跑在当前会话，
   `exit` 会把终端一起关掉。
-- 目前从源码构建，需要本机有 Go；安装脚本不下载预编译产物。
+- 下载路径需要网络与 GitHub API（未认证限流 60 次/小时）；源码构建需要本机 Go。
 
 ### CI 与发布
 
@@ -172,6 +188,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   linux/darwin/windows × amd64/arm64 六个产物（`./cmd/gowork`）；`-trimpath -ldflags '-s -w'`；
   tar.gz（Windows 为 zip），命名 `gowork_<版本>_<系统>_<架构>`；
   汇总 `checksums.txt`，用 `softprops/action-gh-release` 发布并自动生成 release notes。
+- `release.yml` 用 `contains(github.ref_name, '-')` 自动把 alpha / beta / rc 标成 prerelease；
+  否则 `/releases/latest` 会把测试版当成正式版发给安装脚本。
 - 发布不依赖 GoReleaser。
 
 ## 测试
@@ -232,6 +250,13 @@ go test ./...
 12. **`install.ps1` 不能用 `exit`**。`irm | iex` 在当前会话执行，`exit` 会关终端；用 `throw`。
 13. **行尾规则按文件类型区分**：`.go` / `.sh` 必须 LF，`.ps1` 必须 CRLF；
     `.gitattributes` 只保留这些必要规则。
+14. **Bash 的 `{ ... } >>缺失目录` 会返回 0**。追加 rc 时不能靠分组重定向判断失败，否则会
+    误报成功且什么都没写；改用单条 `printf` 追加，并在前面 `mkdir -p` 父目录。
+15. **Windows 检出的 `go.mod` 是 CRLF**。`grep -qx 'module gowork' go.mod` 匹配不到，
+    会让源码模式误判为「不在仓库」而去克隆；改用前缀匹配，并由 `.gitattributes` 强制
+    `go.mod` / `go.sum` 为 LF。
+16. **EXIT trap 的最后一条命令决定退出码**。`[ -n "$tmp_dir" ] && rm -rf ...` 在变量为空时
+    返回 1，会把成功退出的脚本变成失败；trap 里用 `if`，不要用 `&&`。
 
 ## 改动时的连带点
 
@@ -243,12 +268,19 @@ go test ./...
 - 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；`--help` 里补说明。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`。
+- 改 release 产物命名或打包结构：同步 `install.sh` / `install.ps1` 的资产名拼接、解压路径，
+  以及 `checksums.txt` 的校验逻辑。
+- 改安装脚本的 PATH / shell 配置行为：同步 README 的「自动修改的位置」、本节说明与标记块格式。
 
 ## 已知限制
 
 - 字符宽度是近似值，emoji + 变体选择符可能差一列（只影响对齐与截断）。
 - 新一年法定排期公布前只有节日兜底，不预测放假安排。
-- 安装脚本只支持源码构建，需要本机 Go；不会下载 release 产物。
+- 安装脚本默认下载最新 release，只覆盖 linux / darwin / windows 的 amd64 / arm64；
+  其他平台或需要最新源码时用 `--from-source` / `-FromSource`，此时需要本机 Go。
+- 一键脚本默认只装最新正式版；加 `--pre-release` / `-PreRelease` 才装最新预发布版本。
+- 一键脚本只自动配置当前 shell（`$SHELL` 对应的 rc / PowerShell 的 `$PROFILE`）；
+  其他 shell 需要手动加同样的两行；`--no-modify` / `-NoModify` 可以完全不改环境。
 - Windows 上的 fish 不在 CI 覆盖范围（Linux / macOS 覆盖）。
 - **颜色开关的参数穿透（待改进）**：`sysinfo.ColorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
   `sysinfo.Fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `cli` 传进 `Fail`，为此多了一个
