@@ -100,3 +100,5 @@ jobs:
           files: |
             dist/*
           generate_release_notes: true
+          # 带 - 的 tag（alpha / beta / rc）自动标成预发布，安装脚本的 /releases/latest 会跳过它们。
+          prerelease: ${{ contains(github.ref_name, '-') }}
