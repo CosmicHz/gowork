@@ -3,5 +3,10 @@
 *.go text eol=lf
 *.sh text eol=lf
 
+# go.mod / go.sum 保持 LF：安装脚本会在 shell 里按行读取 go.mod，
+# Windows 检出的 CRLF 会让 `module gowork` 的判断失败。
+go.mod text eol=lf
+go.sum text eol=lf
+
 # Windows 专用脚本保持 CRLF。
 *.ps1 text eol=crlf
