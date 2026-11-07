@@ -235,9 +235,11 @@ rm install.sh
 `GOWORK_BIN` 设成可执行文件的绝对路径即可。可用的 shell 是 `powershell`、`sh`
 （bash / zsh / POSIX 通用）与 `fish`。
 
-## 配置工作区
+## 配置
 
-gowork 不知道该去哪里找你的项目，按下面的优先级解析：
+### 工作区
+
+为了知道该去哪里找你的项目，gowork 按下面的优先级解析：
 
 | 优先级 | 方式 |
 | --- | --- |
@@ -266,6 +268,37 @@ mkdir -p ~/.cache/gowork
 printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 ```
 
+### 配置项
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `workspace` | 无 | 工作区根目录；命令行与环境变量优先 |
+| `indent` | `3` | 左侧缩进空格数，最小 3；`--indent` 优先 |
+| `no_color` | `false` | 禁用颜色；`--no-color` 优先 |
+| `recent_limit` | `4` | 「最近活跃」列出的项目数，最小 1 |
+| `recent_name_width` | `35` | 「最近活跃」项目名截断宽度（显示列），最小 5 |
+| `disk_warn_gb` | `10` | 可用空间低于该值时标红；`0` 表示不标红 |
+| `show_disk` | `true` | 是否显示「磁盘」行 |
+| `show_git` | `true` | 是否显示「Git」行 |
+| `show_holiday` | `true` | 是否显示「节日」行 |
+| `show_recent` | `true` | 是否显示「最近活跃」 |
+| `clear_screen` | `true` | 是否清屏（仅真实终端） |
+| `quotes` | 内置格言 | 底部格言的候选数组，随机取一条 |
+
+```json
+{
+  "workspace": "C:\\Projects",
+  "indent": 4,
+  "recent_limit": 6,
+  "disk_warn_gb": 20,
+  "show_git": false,
+  "clear_screen": false,
+  "quotes": ["保持简单。", "先跑起来，再变好。"]
+}
+```
+
+配置文件损坏（JSON 语法错误或数值越界）会直接报错，不会静默使用部分配置。
+
 ## 用法
 
 ### 命令一览
@@ -275,14 +308,55 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `work` | 回到工作区根目录 |
 | `work my-app` | 跳转到 `my-app` |
 | `work my-a` | 前缀匹配，唯一命中就跳过去 （[详细说明](#项目名匹配)） |
-| `work my` | 多个命中时跳最短匹配，并在清屏后列出全部候选 （[详细说明](#项目名匹配)） |
+| `work my` | 多个命中时跳最短匹配，并在仪表盘下方列出全部候选 （[详细说明](#项目名匹配)） |
 | `work -1` | 按最近修改排序，跳第 N 个 |
 | `work <仓库地址>` | 克隆到工作区并进入 |
-| `work my-app -IndentSize 5` | 左侧缩进改为 5（默认 3，最小 3） |
-| `work my-app -Workspace D:\code` | 本次改用它作为工作区 |
+| `work -IndentSize 5 my-app` | 左侧缩进改为 5（默认 3，最小 3） |
+| `work -Workspace D:\code my-app` | 本次改用它作为工作区 |
 
-> 选项拼写随平台而变：Windows 的 shell 函数写 `-IndentSize` / `-Workspace`；
-> macOS / Linux 的函数把参数原样透传给 gowork，写 `--indent` / `--workspace`。
+### 选项一览
+
+目标选择器只能三选一：**位置项目名**、**`--project`**、**`--recent` / `-<N>`**。
+
+#### 目标选择器
+
+| 写法 | Windows PowerShell | 说明 | 范例 |
+| --- | --- | --- | --- |
+| `work <项目名>` | 不变 | 完整项目名、唯一前缀或仓库地址 | `work my-project` |
+| `work -p <目标>` / `work --project <目标>` | `-Project <目标>`（`-Proj` / `-P`） | 与位置项目名互斥 | `work --project my-pro` / `work --project -1` |
+| `work -<N>` / `work --recent <N>` | 不变 | 最近修改的第 N 个（1 起）；与位置项目名、`--project` 互斥 | `work -1` / `work --recent 1` |
+
+`--project -<N>` （或 `--project=-<N>`）等价于 `--recent <N>` 和 `-<N>`
+
+目标选择器之间是互斥的，同时传入多个选择器（即便彼此等价）会报错。
+
+#### 其余选项
+
+| 短选项 | 长选项 | 取值 | Windows PowerShell | 说明 |
+| --- | --- | --- | --- | --- |
+| `-i` | `--indent` | `<N>` | `-IndentSize`（`-Ind` / `-I`） | 左侧缩进空格数，最小 3 |
+| `-w` | `--workspace` | `<目录>` | `-Workspace`（`-Work` / `-W`） | 本次使用的工作区 |
+| `-n` | `--no-color` | 无 | 透传 `--no-color` / `-n` | 禁用 ANSI 颜色 |
+| `-h` | `--help` | 无 | 透传 `--help` / `-h` | 输出帮助 |
+| `-c` | `--cwd-file` | `<文件>` | 透传 | 成功后写入目标目录；供 shell 集成内部使用 |
+
+Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风格选项；macOS / Linux 不支持 PowerShell 风格选项。
+
+带参数的长选项同时接受 `--opt value` 和 `--opt=value`；布尔选项写 `--opt` 或
+`--opt=<true|false>`，不要写 `--no-color false` 这样的选项。也接受单横线长选项（如 `-project`）。
+
+短选项可以组合：`-ni 5` 等价于 `--no-color --indent 5`，`-ni5` 等价于
+`--no-color --indent=5`。带值选项后面的剩余字符会整体作为它的值（如 `-p-1` 等价于 `--project=-1`）。
+
+选项可以写在项目名之前或之后：`work my-app -n` 与 `work -n my-app` 等价。
+
+`--` 之后的参数不再按选项解析，而是作为位置参数：`work -- --no-color` 会去找名为
+`--no-color` 的项目，不会关闭颜色；位置参数只取第一个作为项目名。
+
+> [!important]
+> 在 PowerShell 中， `--` 无效。
+> 例如进入名为 `-1` 的目录可以写 `work ./-1` ，不能写 `work -- -1` 。
+> 未来的版本可能修复这个问题。
 
 ### 项目名匹配
 
@@ -295,8 +369,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
    - 命中 1 个 → 跳转到它。
      如 `work my-a` 会跳转到 `C:\Projects\my-app`。
    - 命中多个 → 跳转到**名字最短**的那个；长度并列时取字典序靠前的目录名。
-     与此同时清屏后列出全部匹配到的目录名。
-     如 `work my` 会跳转到 `C:\Projects\my-app`，并显示
+     与此同时在仪表盘下方列出全部匹配到的目录名。
+     如 `work my` 会跳转到 `C:\Projects\my-app`，并在仪表盘末尾显示
 
      ```text
        ⚠ 前缀 'my' 匹配到多个项目，跳转到最短匹配：
@@ -304,20 +378,42 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
            my-service
      ```
 
-   - 命中 0 个 → 报错 `目录不存在：<完整路径>`。
+   - 命中 0 个 → 报错，如 `目录不存在：C:\Projects\my-project`。
 
 3. 解析失败则**不清屏、不切换目录**，退出码 1。
 
 工作区里以 `.` 开头的目录会被跳过；指向目录的符号链接算项目。
 
-### `-N` 索引
+### `-<N>` 索引
 
 `-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报错并提示有效范围。
+等价的显式写法是 `--recent N`（或 `--recent=N`），例如 `work --recent 1`。
 
-> [!NOTE]
->
-> 工作区里若有目录真的叫 `-1`，`-N` 语法优先：`work -1` 仍按索引解析，不会进入它。
-> 要进入它请写 `work ./-1`。克隆一个名为 `-1` 的仓库也会落进这样的目录。
+### `-<N>` 与目录同名
+
+工作区里若有目录叫 `-1`，或有目录以 `-1` 开头（如 `-1-app`），`work -1` 仍按索引解析，不会按名字匹配或进入这些目录。
+要进入同名目录请写 `work ./-1`（macOS / Linux 也可用 `work -- -1`）；
+要按名字进入请写完整名，如 `work ./-1-app`。
+
+如果的确出现这种情况，仪表盘下方会给出提示。
+
+### `init` 与目录同名
+
+`gowork init <shell>` 是输出 shell 集成代码的子命令，但 shell 函数总把 `--cwd-file` 放在
+最前面，所以 `work init` 里的 `init` 是项目名。工作区里若真有名为 `init` 的目录，
+`work init` 会进入它，并在仪表盘下方提示两者的区别；想完全避免歧义可以写 `work ./init`。
+
+### 选项名与目录同名
+
+工作区里若有目录叫 `-n`、`-p`、`--no-color` 等，而本次命令又确实把这些写法解析成了选项，
+仪表盘下方会提示当前按选项处理，并给出消歧写法：
+
+```text
+   ⚠ "-n" 同时是工作区里的目录名与命令行选项；当前按选项解析
+      要进入该目录请写 work ./-n
+```
+
+`--cwd-file` 由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的位置参数也不参与。
 
 ### 仓库地址
 
@@ -349,10 +445,10 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | 时间 | 本地时间、中文星期、24 小时制 | — |
 | 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
 | 项目 | 工作区下的项目数 | — |
-| 磁盘 | 目标所在卷对**当前用户**可用的空间；小于 10 GB 显示为红色 | 整行不显示 |
+| 磁盘 | 目标所在卷对**当前用户**可用的空间；低于 `disk_warn_gb`（配置项，默认 10 GB）显示为红色 | 整行不显示 |
 | Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain` 的非空行数） | 非仓库或无 git → 整行不显示 |
 | 节日 | 见下 | 显示 `数据获取失败⚠️` |
-| 最近活跃 | 按修改时间倒序前 4 个；名字按显示宽度截到 35 列（超出则留 32 列加 `...`），后接 `MM-dd HH:mm` | 没有项目 → 整段不显示 |
+| 最近活跃 | 按修改时间倒序前 `recent_limit`（配置项，默认 4） 个；名字按显示宽度截到 `recent_name_width`（配置项，默认 35，超出则留 3 列给 `...`） 列，后接 `MM-dd HH:mm` | 没有项目 → 整段不显示 |
 
 标题与问候语：
 
@@ -402,8 +498,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 ./bin/gowork --workspace ~/Projects --project my-app --no-color
 ```
 
-`-N` 索引三种入口都认：裸写的 `-N` 会先被改写成 `--project=-N`，所以直接跑 `-1` 也行
-（否则 Go 的 flag 包会把它当未知选项）。
+`-<N>` 索引三种入口都认：裸写的 `-<N>` 会先被改写成 `--recent=N`，所以直接跑 `-1` 也行
+（否则 Go 的 flag 包会把它当未知选项）；也可以显式写 `--recent 1`。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件。（shell 函数就是靠它回传的）
 
@@ -421,9 +517,9 @@ gowork/
 ├── cmd/gowork/          入口，只把 os.Args 交给 internal/cli
 ├── internal/
 │   ├── ansi/            ANSI 前景色常量与主色调色板
-│   ├── cli/             参数解析、裸 -N 改写、编排与退出码
+│   ├── cli/             参数解析、编排与退出码
 │   ├── config/          工作区解析、配置文件与缓存目录
-│   ├── project/         扫描工作区、-N 索引、前缀匹配、git 状态
+│   ├── project/         扫描工作区、最近项目索引、前缀匹配、git 状态
 │   ├── render/          仪表盘渲染、宽度对齐、克隆提示
 │   ├── holiday/         节假日查询、缓存与「节日」行文案
 │   ├── clone/           仓库地址识别、仓库名推断、git clone
@@ -450,7 +546,7 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 ./cmd/gowork
 ```
 
 平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；其余包与平台无关，
-所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-N` 索引、宽度截断、
+所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-<N>` 索引、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
 
 CI 在 Windows、macOS、Linux 三个平台各跑一遍 `gofmt`、`go vet` 与 `go test`（用 gotestsum
@@ -478,11 +574,11 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
 
 ## 已知限制
 
-- **字符宽度**：`internal/render` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的
-  真实 Unicode 类别判断，宽字符区段手工列举，歧义宽度一律按 1 列——它本就取决于终端配置。
-  只服务行标签补白与「最近活跃」名字列两处对齐。
+- **字符宽度**：`internal/render` 的 `runeWidth` 是 UAX #11 East Asian Width 的近似。零宽字符交给标准库的真实 Unicode 类别判断，宽字符区段手工列举，歧义宽度一律按 1 列——它本就取决于终端配置。只服务行标签补白与「最近活跃」名字列两处对齐。
 - **节假日数据源**：`uapis.cn` 的[万年历接口](https://uapis.cn/docs/api-reference/get-misc-holiday-calendar)。
   按天查询一次就能拿到当天与前后一段时间的节日，整理后写入缓存，避免频繁调用有频率限制的接口；
   缓存里的节日全部过去后才重新查询。
 - **法定排期未公布**：新一年的放假安排公布前，接口只提供公历/农历节日，没有放假天数。
   此时只显示最近的节日兜底，不按往年规律预测；要补全得自己推算，目前没做。
+- **PowerShell 的 `--`**：PowerShell 脚本会在解析参数时丢掉 `--`，所以终止符与
+  `work -- -1` 只在 macOS / Linux 中可用；pwsh 请用 `work ./-1`。

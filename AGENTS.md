@@ -18,14 +18,14 @@
 
 ## 一次运行的完整链路
 
-1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`（PowerShell 还会补
-   `--indent=<n>` 与 `--project` / `--workspace`）。
+1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`；PowerShell 只翻译
+   `-Project` / `-IndentSize` / `-Workspace`，其余参数原样透传。
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
 3. `cli.Main`：`sysinfo.EnableVT()` → 若 `os.Args[1] == "init"` 走 `shell.Init` 直接返回 →
-   `RewriteIndexArgs` 改写裸 `-N` → `Parse`。
-4. `cli.Run`：`config.Resolve` → `render.New` → `project.List` →
+   `config.Load()` → `NormalizeArgs`（先展开短选项，再改写裸 `-N`）→ `parseWith`。
+4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New` → `project.List` →
    若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
-5. `render.Renderer.Render`：清屏、窗口标题、警告、logo、仪表盘、格言。
+5. `render.Renderer.Render`：清屏、窗口标题、logo、仪表盘、格言，最后是提示。
 6. 成功才把目标目录写入 `--cwd-file`；退出码 0 时 shell 函数读取并切目录。
 7. 失败统一走 `sysinfo.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
    **不切换目录**。
@@ -40,7 +40,7 @@
 cmd/gowork/            入口，只把 os.Args 交给 internal/cli
 internal/
   ansi/                ANSI 前景色常量与主色调色板
-  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs）、编排（Main / Run）
+  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs → --recent）、编排（Main / Run）
   config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
   project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
   render/              仪表盘渲染、ANSI 使用、row / rule / printRecent、宽度计算与截断
@@ -63,12 +63,20 @@ install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提�
 
 ## 行为细节
 
-### 工作区
+### 工作区与配置
 
-解析优先级：`--workspace` > `GOWORK_WORKSPACE` > `config.json`。
+工作区解析优先级：`--workspace` > `GOWORK_WORKSPACE` > `config.json.workspace`。
 配置与缓存共用 `os.UserCacheDir()/gowork`：Windows `%LOCALAPPDATA%\gowork`、
 macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 三者都没有时报错，不猜默认路径。
+
+`config.json` 还配置仪表盘：`indent`、`no_color`、`recent_limit`、`recent_name_width`、
+`disk_warn_gb`、`show_disk`、`show_git`、`show_holiday`、`show_recent`、`clear_screen`、`quotes`。
+`load` 先取 `DefaultConfig()` 再 `json.Unmarshal`：缺省字段保留默认值，显式 `0/false`
+覆盖默认值，所以 `Config` 字段是普通值、不再用指针。`Config.Validate()` 拦越界值
+（缩进 ≥3、`recent_limit` ≥1、名称宽度 ≥5、磁盘阈值 ≥0、格言非空），错误信息带实际值。
+`cli.parseWith` 以配置为默认，`--indent` / `--no-color` 覆盖。配置 JSON 损坏或越界会报错，
+不静默忽略。
 
 ### 项目扫描与匹配
 
@@ -76,10 +84,40 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   `DirEntry.IsDir`，因此符号链接、junction 指向目录时都算项目。
 - 按 `ModTime` 倒序；`-N` 取第 N 个（1 起），越界报 `有效范围: 1-N`。
 - `project.Resolve`：完整名 → 前缀（大小写不敏感）→ 唯一命中跳转；多个命中取**名字最短**，
-  并列时按字典序；同时返回候选列表，渲染时在清屏后以黄色警告列出。0 命中报目录不存在。
+  并列时按字典序。返回 `project.Warning` 组（首行 Message + 缩进 Details）：前缀多命中、
+  `-N` 与目录同名或同前缀的歧义。0 命中报目录不存在。
+- `-N` 同名歧义：输入 `-N` 且工作区有名为 `-N` 或以 `-N` 开头的目录（如 `-1-app`）时，
+  提示索引优先、列出候选，并给出 `work ./-<完整名>` 的消歧写法；`./` 是字面精确匹配，
+  不做前缀匹配，所以 `work ./-114` 不会匹配 `-114514`。用 `./-N` 明确指定时不再提示。
 - 空项目名表示回工作区根目录。
 - `project.GitInfo`：`.git` 存在（文件或目录都算，兼容 worktree）且 PATH 有 git，才显示分支与
   `git status --porcelain` 的非空行数；空分支名显示 `detached`。
+
+### 命令行参数
+
+- 入口先 `NormalizeArgs`：`ExpandShortFlags` 展开类 Unix 短选项，`RewriteIndexArgs`
+  把裸 `-N` 改写成 `--recent=N`，最后由 `ReorderArgs` 把项目名之后的选项移到前面。
+  顺序不能反，否则 `-p -1` 的值会被当成索引。
+- `--recent N` 与 `-N` 等价；裸 `-N` 仍交给 `project.Resolve` 按索引处理，因此同名/同前缀提示不受影响。
+  `--recent` 与 `--project` 都是目标选择器，同时出现、或再给项目名时报错；
+  `-N` 也算目标，项目名之后再写会被重排成 `--recent` 并报冲突。
+- `ReorderArgs` 把第一个位置参数之后的选项（含独立值）移到前面，`--` 之后不重排。
+  因此 `work my-app -n` 与 `work -n my-app` 等价；项目名与目标选项同时出现则由
+  `parseWith` 报错，未知选项也会移到前面交给 flag 报错。新增选项时要同步
+  `longFlags` / `valueFlags`，重排与同名提示会自动覆盖。
+- 短选项：`-p` / `-i` / `-w` / `-c` / `-n` / `-h`，分别对应项目、缩进、工作区、
+  cwd 文件、禁用颜色与帮助。布尔项可组合（`-ni 5`、`-ni5`），带值项吃掉组合剩余
+  字符或下一个参数；整段出现未知字符时原样保留，交给 `flag` 报错。`--` 作为终止符后不展开；
+  如果它是上一个带值选项的值，则继续处理后续参数。
+- `--` 之后的参数都是位置参数；第一个位置参数会被标记为 `ProjectAfterTerminator`，
+  `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
+  所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
+  该写法只在直接调用二进制或 POSIX shell 中可用；pwsh 用 `./-1`。
+- `cli.collisionWarnings` 汇总 CLI 语义造成的同名歧义：`init` 子命令、选项名
+  （如 `-n`、`-p`、`--no-color`）与工作区目录同名。只对 `fs.Visit` 实际解析到的选项
+  提示；选项重排后，位置参数之后的选项也会算，`--` 之后的位置参数不算。
+  `cwd-file`（shell 自动注入）与 `help` 不提示。
+  提示按用户实际拼写的选项名比较目录名，消歧写法是 `work ./<选项名>`。
 
 ### 仓库地址与克隆
 
@@ -96,14 +134,20 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 - `render.New`：`tty = term.IsTerminal(stdout)`；颜色由 `sysinfo.ColorEnabled` 判定
   （tty && 未传 `--no-color` && `NO_COLOR` 为空）；accent 从青/绿/黄/紫随机选。
-- `Render` 先清屏再输出警告，避免警告被清掉。清屏、窗口标题仅在 tty 下执行。
+  默认渲染配置由 `render.DefaultOptions()` 提供，数值默认直接引用 `config.Default*` /
+  `config.Min*`，不要再在 render 里复制一份。调用方从 `DefaultOptions()` 起步再覆盖字段；
+  `Options` 的 `Show*` / `ClearScreen` 是正向 bool，零值表示关闭，不能拿 `Options{}` 当默认。
+- `Render` 先清屏，提示放在仪表盘最下方（格言之后）：每组首行带 ⚠、明细缩进、
+  组间空一行。这样既不会被清屏清掉，前缀歧义与同名冲突同时出现时也不会混在一起。
+  清屏、窗口标题仅在 tty 下执行。
 - 进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`；放不下就另起一行；
   回工作区根目录不加。
-- 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、磁盘（可用 <10 GB 变红，
-  取不到整行不显示）、Git（非仓库整行不显示）、节日、最近活跃（前 4，名字按显示宽度
-  截到 35 列，后接 `MM-dd HH:mm`）。
+- 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、磁盘（可用低于
+  `disk_warn_gb`（默认 10 GB）变红，取不到整行不显示）、Git（非仓库整行不显示）、
+  节日、最近活跃（默认前 `recent_limit` 个，名字按显示宽度截到
+  `recent_name_width` 列，后接 `MM-dd HH:mm`）。
 - `rule` 宽度 = `min(终端宽度, 100) - 2*缩进`，只封顶，不设下限。
-- 问候语按小时分段；底部从固定的格言表随机取一条。
+- 问候语按小时分段；底部从格言表（默认内置，可由 `quotes` 覆盖）随机取一条。
 - `runeWidth` 是 East Asian Width 的近似：控制字符与组合字符 0 列，CJK/全角/emoji 2 列，
   其余 1 列；宽窄不确定的字符按 1 列。已知 `⚠️`（U+26A0 + U+FE0F）会少算一列，
   只影响行尾内容与含 emoji 的项目名截断。
@@ -140,7 +184,15 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - POSIX：`local` + `mktemp` + `command cat` + `\cd --`，返回二进制的退出码；
   找不到二进制返回 127，临时文件失败返回 1。
 - fish：存在性用 `command -sq`，外部命令同样 `command` 前缀。
-- PowerShell：`function global:work`，参数 `-Project` / `-IndentSize` / `-Workspace`；
+- PowerShell：`function global:work` **不用 `param` 块**——用了会把 `--indent 5` 的
+  `--indent` 绑到第一个位置参数，原生参数无法透传；没有 param 块时所有实参都在 `$args`。
+  脚本只把 Windows 写法 `-Project` / `-IndentSize` / `-Workspace`（含 `-Proj` / `-Ind` /
+  `-Work` 等无歧义缩写）翻译成原生长选项，其余（`--no-color`、`-n`、`-1`、项目名）原样透传。
+  小写单字母 `-p` / `-i` / `-w` 保留为原生短选项，不参与缩写翻译。
+  保留 `param` 块的替代方案（含 `ValueFromRemainingArguments`）验证过不行：PowerShell 仍会把
+  第一个原生 token（如 `--no-color`）绑给第一个位置参数。代价是失去参数元数据、补全与
+  `Get-Help`，`[int]` 类型转换移到 gowork，`-Project -IndentSize` 会把后者当值，且 PowerShell
+  会在进入函数前丢掉 `--`。这些属于取舍，不要为了“像原生函数”再改回 `param` 块。
   用 `Start-Process -NoNewWindow -Wait -PassThru` 让子进程直接接管控制台，
   绕开 PowerShell 输出管线，ANSI 颜色不会被 `$PSStyle.OutputRendering` 抹掉；
   参数逐个人工加引号后再拼命令行；从 `--cwd-file` 读取目标并 `Set-Location`；
@@ -201,6 +253,9 @@ go test ./...
 ```
 
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
+- `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住参数重排：
+  项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
+  项目名与 `--project` / `--recent` / `-N` 的冲突。
 - `internal/shell/shell_test.go`：
   - 各 shell 名称、别名、大小写、错误参数；
   - `TestScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell
@@ -240,7 +295,10 @@ go test ./...
 6. **缓存要存整理后的数据**，不要原样存接口响应；数据结构变化时递增
    `cacheVersion`（当前 4）；版本不匹配的缓存直接丢弃。
 7. **裸写 `-N` 会被 `flag` 包当成未知选项**。`cli.RewriteIndexArgs` 在解析前改写成
-   `--project=-N`；新增带值的选项必须同步加进 `cli.valueFlags`，否则 `--flag -1` 会被误改。
+   `--recent=N`；新增带值的选项必须同步加进 `cli.valueFlags`，否则 `--flag -1` 会被误改。
+   解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
+   不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
+   （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
 8. **`init` 子命令只在 `argv[1]` 时生效**。shell 函数总把 `--cwd-file` 放最前面，
    所以 `work init` 是项目名；不要据此认为「`work init` 会打印脚本」。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
@@ -265,8 +323,11 @@ go test ./...
 - 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
   其余逻辑必须能在任意平台 `go test`。
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。
-- 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；`--help` 里补说明。
+- 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；
+  加短选项时同步 `shortFlags` / `shortBoolFlags`；同时加进 `longFlags`（重排与同名提示依赖它）；
+  `--help` 里补说明。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
+  默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`。
 - 改 release 产物命名或打包结构：同步 `install.sh` / `install.ps1` 的资产名拼接、解压路径，
   以及 `checksums.txt` 的校验逻辑。
@@ -282,6 +343,10 @@ go test ./...
 - 一键脚本只自动配置当前 shell（`$SHELL` 对应的 rc / PowerShell 的 `$PROFILE`）；
   其他 shell 需要手动加同样的两行；`--no-modify` / `-NoModify` 可以完全不改环境。
 - Windows 上的 fish 不在 CI 覆盖范围（Linux / macOS 覆盖）。
+- **PowerShell 参数对应（待补）**：目前 PowerShell 只翻译 `-Project` / `-IndentSize` /
+  `-Workspace`（含无歧义缩写），其余原生参数（`--recent`、`--no-color`、短选项等）靠透传，
+  已经可用。目标是再给所有原生参数提供 pwsh 风格别名（如 `-Recent` / `-NoColor`），
+  并与原生参数一一对应；实现时同步模板、测试与 README。
 - **颜色开关的参数穿透（待改进）**：`sysinfo.ColorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
   `sysinfo.Fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `cli` 传进 `Fail`，为此多了一个
   `bool` 参数，目前只有 `cli.Main -> sysinfo.Fail` 一层，先接受。若错误输出还要别的配置，改为传
