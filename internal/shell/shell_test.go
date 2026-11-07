@@ -5,9 +5,154 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// TestPowerShellAcceptsNativeArgs 把生成的函数放进 pwsh，用一个会逐行记录
+// 命令行参数的假 gowork.cmd，逐项验证 PowerShell 写法与原生参数的对应关系：
+// 原生长选项/短选项/项目名/索引原样透传，Windows 写法翻译成对应的原生参数。
+// 只在 Windows + pwsh 下运行。
+func TestPowerShellAcceptsNativeArgs(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell 参数行为只在 Windows 下验证")
+	}
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("未安装 pwsh")
+	}
+
+	script, ok := template("powershell")
+	if !ok {
+		t.Fatal("缺少 powershell 模板")
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"无参数", nil, nil},
+		{"位置项目", []string{"my-app"}, []string{"my-app"}},
+		{"原生项目独立值", []string{"--project", "foo"}, []string{"--project", "foo"}},
+		{"原生项目等号", []string{"--project=foo"}, []string{"--project=foo"}},
+		{"原生缩进独立值", []string{"--indent", "5"}, []string{"--indent", "5"}},
+		{"原生缩进等号", []string{"--indent=5"}, []string{"--indent=5"}},
+		{"原生工作区独立值", []string{"--workspace", `C:\code`}, []string{"--workspace", `C:\code`}},
+		{"原生工作区等号", []string{`--workspace=C:\code`}, []string{`--workspace=C:\code`}},
+		{"原生禁用颜色", []string{"--no-color"}, []string{"--no-color"}},
+		{"原生 cwd-file", []string{`--cwd-file=C:\tmp`}, []string{`--cwd-file=C:\tmp`}},
+		{"短项目", []string{"-p", "foo"}, []string{"-p", "foo"}},
+		{"短缩进", []string{"-i", "5"}, []string{"-i", "5"}},
+		{"短工作区", []string{"-w", `C:\code`}, []string{"-w", `C:\code`}},
+		{"短 cwd-file", []string{"-c", `C:\tmp`}, []string{"-c", `C:\tmp`}},
+		{"短禁用颜色", []string{"-n"}, []string{"-n"}},
+		{"短选项组合", []string{"-ni", "5"}, []string{"-ni", "5"}},
+		{"裸索引", []string{"-1"}, []string{"-1"}},
+		{"短帮助", []string{"-h"}, []string{"-h"}},
+		{"Windows 项目", []string{"-Project", "foo"}, []string{"--project", "foo"}},
+		{"Windows 项目等号", []string{"-Project=foo"}, []string{"--project=foo"}},
+		{"Windows 项目缩写", []string{"-Proj", "foo"}, []string{"--project", "foo"}},
+		{"Windows 项目单字母大写", []string{"-P", "foo"}, []string{"--project", "foo"}},
+		{"Windows 项目小写缩写", []string{"-proj", "foo"}, []string{"--project", "foo"}},
+		{"Windows 缩进", []string{"-IndentSize", "5"}, []string{"--indent", "5"}},
+		{"Windows 缩进等号", []string{"-IndentSize=5"}, []string{"--indent=5"}},
+		{"Windows 缩进缩写", []string{"-Ind", "5"}, []string{"--indent", "5"}},
+		{"Windows 工作区", []string{"-Workspace", `C:\code`}, []string{"--workspace", `C:\code`}},
+		{"Windows 工作区等号", []string{`-Workspace=C:\code`}, []string{`--workspace=C:\code`}},
+		{"Windows 工作区缩写", []string{"-Work", `C:\code`}, []string{"--workspace", `C:\code`}},
+		{"带空格项目", []string{"-Project", "my app"}, []string{"--project", "my app"}},
+		{"带空格工作区", []string{`-Workspace=C:\my code`}, []string{`--workspace=C:\my code`}},
+	}
+
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	fake := filepath.Join(dir, "gowork.cmd")
+	// 每行记录一个参数：%~1 去掉外层引号，shift 逐个前移，便于断言含空格的参数。
+	content := "@echo off\r\n" +
+		">>\"" + argvFile + "\" echo CALL\r\n" +
+		":loop\r\n" +
+		"if \"%~1\"==\"\" goto done\r\n" +
+		">>\"" + argvFile + "\" echo %~1\r\n" +
+		"shift\r\n" +
+		"goto loop\r\n" +
+		":done\r\n" +
+		"exit /b 0\r\n"
+	if err := os.WriteFile(fake, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runner strings.Builder
+	runner.WriteString(script)
+	runner.WriteString("\n$env:GOWORK_BIN = '")
+	runner.WriteString(strings.ReplaceAll(fake, "'", "''"))
+	runner.WriteString("'\n")
+	for _, c := range cases {
+		runner.WriteString("work")
+		for _, arg := range c.args {
+			runner.WriteString(" ")
+			runner.WriteString(psQuote(arg))
+		}
+		runner.WriteString("\n")
+	}
+	path := filepath.Join(dir, "run.ps1")
+	if err := os.WriteFile(path, []byte("\ufeff"+runner.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := exec.Command("pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", path).CombinedOutput(); err != nil {
+		t.Fatalf("执行 work 失败：%v\n%s", err, out)
+	}
+
+	raw, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("假 gowork 没有收到参数：%v", err)
+	}
+	calls := splitCalls(string(raw))
+	if len(calls) != len(cases) {
+		t.Fatalf("记录了 %d 次调用，想要 %d 次：\n%s", len(calls), len(cases), raw)
+	}
+
+	for i, c := range cases {
+		got := calls[i]
+		if len(got) == 0 || !strings.HasPrefix(got[0], "--cwd-file=") {
+			t.Errorf("%s：第一次调用缺少 cwd-file：%v", c.name, got)
+			continue
+		}
+		// 第一项是函数自己注入的 cwd-file，之后才是用户参数。
+		got = got[1:]
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s：得到 %v，想要 %v", c.name, got, c.want)
+		}
+	}
+}
+
+// psQuote 把字符串包成 PowerShell 单引号字面量。
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// splitCalls 按假 gowork 写下的 CALL 标记拆分每次调用的参数。
+func splitCalls(raw string) [][]string {
+	var calls [][]string
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		switch line {
+		case "CALL":
+			calls = append(calls, nil)
+		case "":
+			// 忽略文件末尾换行产生的空行。
+		default:
+			if len(calls) == 0 {
+				calls = append(calls, nil)
+			}
+			calls[len(calls)-1] = append(calls[len(calls)-1], line)
+		}
+	}
+	return calls
+}
 
 func TestInit(t *testing.T) {
 	for _, name := range []string{"powershell", "PowerShell", "pwsh", "sh", "bash", "zsh", "posix", "fish"} {
