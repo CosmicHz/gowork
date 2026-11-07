@@ -19,6 +19,12 @@ type Project struct {
 	Mod  time.Time
 }
 
+// Warning 是一组在仪表盘下方展示的提示：Message 是首行，Details 逐行缩进列出。
+type Warning struct {
+	Message string
+	Details []string
+}
+
 // IndexPattern 匹配 -1 / -2 / ... 形式的“按最近修改排序的第 N 个项目”。
 // cli 改写裸索引参数时也用它，避免两处各写一份。
 var IndexPattern = regexp.MustCompile(`^-(\d+)$`)
@@ -50,24 +56,41 @@ func List(root string) []Project {
 	return projects
 }
 
-// Resolve 把用户输入解析成绝对目录，并返回需要在清屏后展示的警告。
-func Resolve(workspace, want string, projects []Project) (string, []string, error) {
-	var warnings []string
+// Resolve 把用户输入解析成绝对目录，并返回需要在仪表盘下方展示的警告。
+func Resolve(workspace, want string, projects []Project) (string, []Warning, error) {
+	return resolve(workspace, want, projects, true)
+}
 
-	if m := IndexPattern.FindStringSubmatch(want); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		idx := n - 1
-		if idx < 0 || idx >= len(projects) {
-			return "", nil, fmt.Errorf("项目索引超出范围，有效范围: 1-%d", len(projects))
+// ResolveWithoutIndex 与 Resolve 相同，但不把 -N 解释成索引。
+// 用于 `--` 之后的第一个位置参数：`work -- -1` 按普通名字匹配 -1。
+func ResolveWithoutIndex(workspace, want string, projects []Project) (string, []Warning, error) {
+	return resolve(workspace, want, projects, false)
+}
+
+func resolve(workspace, want string, projects []Project, allowIndex bool) (string, []Warning, error) {
+	var warnings []Warning
+
+	if allowIndex {
+		if m := IndexPattern.FindStringSubmatch(want); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			idx := n - 1
+			if idx < 0 || idx >= len(projects) {
+				return "", nil, fmt.Errorf("项目索引超出范围，有效范围: 1-%d", len(projects))
+			}
+			// 工作区里有同名或同前缀目录（如 "-1"、"-1-app"）时，索引语法优先，
+			// 提醒用户怎么按名字进入。
+			if w, ok := indexCollisionWarning(projects, want); ok {
+				warnings = append(warnings, w)
+			}
+			want = projects[idx].Name
 		}
-		want = projects[idx].Name
 	}
 
 	if want == "" {
 		if !IsDir(workspace) {
 			return "", nil, fmt.Errorf("目录不存在：%s", workspace)
 		}
-		return workspace, nil, nil
+		return workspace, warnings, nil
 	}
 
 	if !IsDir(filepath.Join(workspace, want)) {
@@ -83,10 +106,14 @@ func Resolve(workspace, want string, projects []Project) (string, []string, erro
 					shortest = h
 				}
 			}
-			warnings = append(warnings, fmt.Sprintf("前缀 '%s' 匹配到多个项目，跳转到最短匹配：", want))
-			for _, h := range hits {
-				warnings = append(warnings, h.Name)
+			details := make([]string, len(hits))
+			for i, h := range hits {
+				details[i] = h.Name
 			}
+			warnings = append(warnings, Warning{
+				Message: fmt.Sprintf("前缀 '%s' 匹配到多个项目，跳转到最短匹配：", want),
+				Details: details,
+			})
 			want = shortest.Name
 		}
 	}
@@ -96,6 +123,46 @@ func Resolve(workspace, want string, projects []Project) (string, []string, erro
 		return "", nil, fmt.Errorf("目录不存在：%s", target)
 	}
 	return target, warnings, nil
+}
+
+// indexCollisionWarning 在输入是 -N 索引、且工作区里有同名或同前缀目录时给出提示。
+// 同名与同前缀是两个独立类别：前者可以只有一个，后者可以同时有多个，甚至并存。
+func indexCollisionWarning(projects []Project, token string) (Warning, bool) {
+	var (
+		exact    Project
+		hasExact bool
+		prefixes []Project
+	)
+	for _, p := range prefixMatches(projects, token) {
+		if p.Name == token {
+			exact, hasExact = p, true
+			continue
+		}
+		prefixes = append(prefixes, p)
+	}
+
+	if !hasExact && len(prefixes) == 0 {
+		return Warning{}, false
+	}
+
+	details := make([]string, 0, len(prefixes)+2)
+	if hasExact {
+		details = append(details, exact.Name)
+	}
+	for _, p := range prefixes {
+		details = append(details, p.Name)
+	}
+	if hasExact {
+		details = append(details, fmt.Sprintf("要进入同名目录请写 work ./%s", exact.Name))
+	}
+	if len(prefixes) > 0 {
+		details = append(details, fmt.Sprintf("要进入这些目录请写完整名，如 work ./%s", prefixes[0].Name))
+	}
+
+	return Warning{
+		Message: fmt.Sprintf("%q 同时是项目索引写法，工作区里有同名或同前缀的目录；当前按索引解析", token),
+		Details: details,
+	}, true
 }
 
 // prefixMatches 返回名称以 prefix 开头的项目，按名称升序排列。
