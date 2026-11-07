@@ -14,16 +14,15 @@ import (
 	"golang.org/x/term"
 
 	"gowork/internal/ansi"
+	"gowork/internal/config"
 	"gowork/internal/holiday"
 	"gowork/internal/project"
 	"gowork/internal/sysinfo"
 )
 
 const (
-	maxRuleWidth    = 100
-	rowLabelWidth   = 12
-	recentLimit     = 4
-	recentNameWidth = 35
+	maxRuleWidth  = 100
+	rowLabelWidth = 12
 	// bannerSuffixGap 是标题后缀与 logo 之间的空格数。
 	bannerSuffixGap = 2
 )
@@ -48,31 +47,87 @@ var quotes = []string{
 	"代码是写给人看的，顺便让机器运行。",
 }
 
-// Options 是渲染所需的命令行配置。
+// Options 是渲染所需的配置。
 type Options struct {
-	Indent    int
-	Workspace string
-	NoColor   bool
+	Indent          int
+	Workspace       string
+	NoColor         bool
+	RecentLimit     int
+	RecentNameWidth int
+	DiskWarnGB      float64
+	ShowDisk        bool
+	ShowGit         bool
+	ShowHoliday     bool
+	ShowRecent      bool
+	ClearScreen     bool
+	Quotes          []string
+}
+
+// DefaultOptions 返回默认渲染配置；调用方从这里起步再覆盖需要的字段。
+// 数值默认与 config.DefaultConfig 共用同一组常量，避免两份默认值漂移。
+func DefaultOptions() Options {
+	return Options{
+		Indent:          config.DefaultIndent,
+		RecentLimit:     config.DefaultRecentLimit,
+		RecentNameWidth: config.DefaultRecentNameWidth,
+		DiskWarnGB:      config.DefaultDiskWarnGB,
+		ShowDisk:        true,
+		ShowGit:         true,
+		ShowHoliday:     true,
+		ShowRecent:      true,
+		ClearScreen:     true,
+	}
 }
 
 // Renderer 输出仪表盘；清屏、窗口标题与颜色只在真实终端下启用。
 type Renderer struct {
-	out       io.Writer
-	indent    string
-	width     int
-	tty       bool
-	color     bool
-	accent    string
-	workspace string
+	out             io.Writer
+	indent          string
+	width           int
+	tty             bool
+	color           bool
+	accent          string
+	workspace       string
+	recentLimit     int
+	recentNameWidth int
+	diskWarnGB      float64
+	showDisk        bool
+	showGit         bool
+	showHoliday     bool
+	showRecent      bool
+	clearScreenOn   bool
+	quotes          []string
 }
 
-// New 按终端能力与命令行开关决定宽度、颜色与主色。
+// New 按终端能力与配置决定宽度、颜色、布局与主色。
 func New(o Options) *Renderer {
+	if o.RecentLimit < 1 {
+		o.RecentLimit = config.DefaultRecentLimit
+	}
+	if o.RecentNameWidth < config.MinRecentNameWidth {
+		o.RecentNameWidth = config.DefaultRecentNameWidth
+	}
+	if o.DiskWarnGB < 0 {
+		o.DiskWarnGB = config.DefaultDiskWarnGB
+	}
+	if len(o.Quotes) == 0 {
+		o.Quotes = quotes
+	}
+
 	r := &Renderer{
-		out:       os.Stdout,
-		indent:    strings.Repeat(" ", o.Indent),
-		width:     sysinfo.TerminalWidth(),
-		workspace: o.Workspace,
+		out:             os.Stdout,
+		indent:          strings.Repeat(" ", o.Indent),
+		width:           sysinfo.TerminalWidth(),
+		workspace:       o.Workspace,
+		recentLimit:     o.RecentLimit,
+		recentNameWidth: o.RecentNameWidth,
+		diskWarnGB:      o.DiskWarnGB,
+		showDisk:        o.ShowDisk,
+		showGit:         o.ShowGit,
+		showHoliday:     o.ShowHoliday,
+		showRecent:      o.ShowRecent,
+		clearScreenOn:   o.ClearScreen,
+		quotes:          o.Quotes,
 	}
 	r.tty = term.IsTerminal(int(os.Stdout.Fd()))
 	r.color = sysinfo.ColorEnabled(r.tty, o.NoColor)
@@ -81,23 +136,14 @@ func New(o Options) *Renderer {
 }
 
 // Render 输出一次完整的仪表盘。
-func (r *Renderer) Render(target string, projects []project.Project, warnings []string) {
+func (r *Renderer) Render(target string, projects []project.Project, warnings []project.Warning) {
 	now := time.Now()
 
-	// 清屏后再输出，否则警告会被一起清掉。
-	r.clearScreen()
+	// 清屏后再输出
+	if r.clearScreenOn {
+		r.clearScreen()
+	}
 	r.setTitle("WORK | " + filepath.Base(target))
-
-	for i, w := range warnings {
-		marker := r.indent + "  ⚠ "
-		if i > 0 {
-			marker = r.indent + "     "
-		}
-		r.println(r.paint(ansi.Yellow, marker+w))
-	}
-	if len(warnings) > 0 {
-		r.println()
-	}
 
 	// 进入具体项目时，把 “ on 项目名” 补在标题的倒数第二行末尾；
 	// 名字太长放不下就另起一行，免得折行把 logo 撑破。回工作区根目录时不加。
@@ -132,31 +178,55 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 	r.row("位置", target, ansi.White)
 	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), ansi.White)
 
-	if free, ok := sysinfo.DiskFreeGB(target); ok {
-		color := ansi.White
-		if free < 10 {
-			color = ansi.Red
+	if r.showDisk {
+		if free, ok := sysinfo.DiskFreeGB(target); ok {
+			color := ansi.White
+			if free < r.diskWarnGB {
+				color = ansi.Red
+			}
+			r.row("磁盘", fmt.Sprintf("%.1f GB 可用", free), color)
 		}
-		r.row("磁盘", fmt.Sprintf("%.1f GB 可用", free), color)
 	}
 
-	if branch, changes, ok := project.GitInfo(target); ok {
-		r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.accent)
+	if r.showGit {
+		if branch, changes, ok := project.GitInfo(target); ok {
+			r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.accent)
+		}
 	}
 
-	r.row("节日", holiday.Line(holiday.Next(now), now), ansi.White)
+	if r.showHoliday {
+		r.row("节日", holiday.Line(holiday.Next(now), now), ansi.White)
+	}
 
-	r.printRecent(projects)
+	if r.showRecent {
+		r.printRecent(projects)
+	}
 
 	r.println()
 	r.rule()
-	r.println(r.indent + "  " + r.paint(ansi.Green, quotes[rand.IntN(len(quotes))]))
+	r.println(r.indent + "  " + r.paint(ansi.Green, r.quotes[rand.IntN(len(r.quotes))]))
+
+	r.printWarnings(warnings)
 	r.println()
+}
+
+// printWarnings 在仪表盘下方逐组输出提示。每组首行带 ⚠，明细缩进，
+// 组与组之间空一行，这样前缀歧义与名称冲突同时出现时也不会混在一起。
+func (r *Renderer) printWarnings(warnings []project.Warning) {
+	for _, w := range warnings {
+		r.println()
+		r.println(r.paint(ansi.Yellow, r.indent+"  ⚠ "+w.Message))
+		for _, d := range w.Details {
+			r.println(r.paint(ansi.Yellow, r.indent+"     "+d))
+		}
+	}
 }
 
 // CloneNotice 在克隆前清屏并打印地址与目标，让用户知道接下来的 git 输出属于谁。
 func (r *Renderer) CloneNotice(url, dest string) {
-	r.clearScreen()
+	if r.clearScreenOn {
+		r.clearScreen()
+	}
 	r.println()
 	r.println(r.indent + r.paint(r.accent, "正在克隆仓库"))
 	r.row("地址", url, ansi.White)
@@ -201,8 +271,8 @@ func (r *Renderer) row(label, value, valueColor string) {
 
 func (r *Renderer) printRecent(projects []project.Project) {
 	recent := projects
-	if len(recent) > recentLimit {
-		recent = recent[:recentLimit]
+	if len(recent) > r.recentLimit {
+		recent = recent[:r.recentLimit]
 	}
 	if len(recent) == 0 {
 		return
@@ -211,8 +281,8 @@ func (r *Renderer) printRecent(projects []project.Project) {
 	r.println()
 	r.println(r.indent + r.paint(r.accent, "  最近活跃"))
 	for i, p := range recent {
-		name := truncateWidth(p.Name, recentNameWidth)
-		pad := recentNameWidth - displayWidth(name) + 1
+		name := truncateWidth(p.Name, r.recentNameWidth)
+		pad := r.recentNameWidth - displayWidth(name) + 1
 		r.println(r.indent +
 			r.paint(ansi.DarkGray, fmt.Sprintf("%2d  ", i+1)) +
 			name + strings.Repeat(" ", pad) +
