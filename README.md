@@ -33,8 +33,8 @@ PS C:\Projects\gowork> work awe
 ```
 
 支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7；
-shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / zsh / POSIX sh 与 fish。
-从源码构建需要 Go 1.26.5 或更新。
+shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / POSIX sh、fish，
+以及 zsh（有自动补全支持）。从源码构建需要 Go 1.26.5 或更新。
 
 ## 安装
 
@@ -164,18 +164,26 @@ cp "gowork_${ver}_linux_amd64/gowork" ~/.local/bin/gowork
 chmod +x ~/.local/bin/gowork
 ```
 
-然后手动把目录加入 PATH、写入 shell 集成（下面以 PowerShell 与 zsh 为例）：
+然后手动把目录加入 PATH、写入 shell 集成（下面以 PowerShell、zsh 与 bash 为例）：
 
 ```powershell
 [Environment]::SetEnvironmentVariable('Path',
   [Environment]::GetEnvironmentVariable('Path','User') + ';' + "$env:LOCALAPPDATA\gowork\bin", 'User')
+
 # 在 $PROFILE 末尾加：
 Invoke-Expression (& { (gowork init powershell | Out-String) })
 ```
 
 ```sh
+# zsh
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-echo 'eval "$(gowork init sh)"' >> ~/.zshrc
+echo 'eval "$(gowork init zsh)"' >> ~/.zshrc
+```
+
+```sh
+# bash / POSIX sh（macOS 的 bash 用 ~/.bash_profile）
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(gowork init sh)"' >> ~/.bashrc
 ```
 
 fish 用户改用 `fish_add_path ~/.local/bin` 和 `gowork init fish | source`。
@@ -202,7 +210,7 @@ go build -o bin\gowork.exe .\cmd\gowork
 Invoke-Expression (& { (gowork init powershell | Out-String) })
 ```
 
-macOS / Linux：
+macOS / Linux（以 zsh 为例）：
 
 ```sh
 git clone https://github.com/CosmicHz/gowork.git
@@ -211,7 +219,7 @@ mkdir -p ~/.local/bin
 go build -o ~/.local/bin/gowork ./cmd/gowork
 
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-echo 'eval "$(gowork init sh)"' >> ~/.zshrc
+echo 'eval "$(gowork init zsh)"' >> ~/.zshrc
 ```
 
 #### 方式二：用安装脚本构建
@@ -232,8 +240,8 @@ rm install.sh
 ```
 
 `gowork init <shell>` 输出的函数会在 PATH 上找 `gowork`；不想放进 PATH 时，把
-`GOWORK_BIN` 设成可执行文件的绝对路径即可。可用的 shell 是 `powershell`、`sh`
-（bash / zsh / POSIX 通用）与 `fish`。
+`GOWORK_BIN` 设成可执行文件的绝对路径即可。可填入的 shell 名称有 `powershell`、
+`zsh`、`sh`（bash / POSIX，zsh 也可用）与 `fish`。
 
 ## 配置
 
@@ -523,7 +531,7 @@ gowork/
 │   ├── render/          仪表盘渲染、宽度对齐、克隆提示
 │   ├── holiday/         节假日查询、缓存与「节日」行文案
 │   ├── clone/           仓库地址识别、仓库名推断、git clone
-│   ├── shell/           gowork init 的三份 shell 集成模板
+│   ├── shell/           gowork init 的 shell 集成模板（sh / fish / powershell / zsh）
 │   └── sysinfo/         终端宽度、颜色开关、失败输出、VT 与磁盘空间
 ├── install.sh           macOS / Linux 安装脚本：构建并放到 PATH 目录
 ├── install.ps1          Windows 安装脚本，同上
@@ -557,9 +565,9 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
 
 ## 为什么需要 shell 集成
 
-子进程改不了父 shell 的工作目录，所以 gowork 把目标目录写进 `--cwd-file` 指定的临时文件，
-由 shell 侧读取后切换目录。这一层无法省略，但它足够薄：不含任何业务逻辑，
-删掉它工具本身依然能独立运行（只是不会切目录）。
+gowork 作为子进程改不了父 shell 的工作目录，所以需要一个 shell 函数帮助其做到这一点。
+gowork 会把目标目录写进 `--cwd-file` 指定的临时文件，由 shell 侧读取后切换目录。
+这一层无法省略，但不含任何业务逻辑，删掉它工具本身依然能独立运行（只是不会切目录）。
 
 集成代码由 `gowork init <shell>` 生成，不需要在仓库里维护启动器文件：
 
@@ -568,9 +576,12 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
   输出直接落在主机上、不进管道，所以 `$x = work` 捕获不到仪表盘。
   生成的代码保持纯 ASCII：pwsh 会按控制台代码页解码 `gowork init powershell` 的管道输出，
   中文在 GBK 环境下会被解坏并吞掉换行。
-- `sh` 与 `fish`：生成一个**函数**，以便修改父 shell 的目录。
-  gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，
-  因此清屏、窗口标题和颜色才会生效。
+- `sh` 与 `fish`：gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，因此清屏、窗口标题和颜色才会生效。
+- `zsh`：在 sh 函数体之后追加补全脚本。`_gowork` 通过 `gowork complete projects`
+  动态取项目名（最近修改的在前），并描述全部选项；`-p` 补项目、`-w` 补目录、
+  `-i` / `--recent` 补数字、裸 `-N` 补 `-1`…`-N`。补全依赖 zsh 的 `compinit`，
+  没加载时静默跳过。oh-my-zsh / prezto 等框架通常已经加载它；手动配置的 zsh 需要在
+  `eval "$(gowork init zsh)"` 之前有一句 `autoload -Uz compinit && compinit`。
 
 ## 已知限制
 
@@ -582,3 +593,5 @@ fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外�
   此时只显示最近的节日兜底，不按往年规律预测；要补全得自己推算，目前没做。
 - **PowerShell 的 `--`**：PowerShell 脚本会在解析参数时丢掉 `--`，所以终止符与
   `work -- -1` 只在 macOS / Linux 中可用；pwsh 请用 `work ./-1`。
+- **zsh 补全**：`gowork init sh` 不含补全，zsh 用户请改用 `gowork init zsh`；
+  已经写入 `.zshrc` 的旧配置不会被安装脚本自动改写。

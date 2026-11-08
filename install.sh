@@ -80,6 +80,10 @@ is_fish() {
     [ "${SHELL##*/}" = fish ]
 }
 
+is_zsh() {
+    [ "${SHELL##*/}" = zsh ]
+}
+
 # 当前 shell 的配置文件；识别不了就返回 1。
 detect_rc() {
     case "${SHELL##*/}" in
@@ -109,6 +113,9 @@ print_manual() {
     if is_fish; then
         printf '  fish_add_path "%s"\n' "$bin_dir"
         printf '  gowork init fish | source\n'
+    elif is_zsh; then
+        printf '  export PATH="%s:$PATH"\n' "$bin_dir"
+        printf '  eval "$(gowork init zsh)"\n'
     else
         printf '  export PATH="%s:$PATH"\n' "$bin_dir"
         printf '  eval "$(gowork init sh)"\n'
@@ -150,6 +157,9 @@ setup_env() {
     if is_fish; then
         path_line="fish_add_path \"$bin_dir\""
         hook_line='gowork init fish | source'
+    elif is_zsh; then
+        path_line="export PATH=\"$bin_dir:\$PATH\""
+        hook_line='eval "$(gowork init zsh)"'
     else
         path_line="export PATH=\"$bin_dir:\$PATH\""
         hook_line='eval "$(gowork init sh)"'

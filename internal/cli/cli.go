@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -465,14 +466,32 @@ func Parse(args []string, cfg config.Config) (Options, error) {
 	return parseWith(fs, args, cfg)
 }
 
-// Main 是命令行的完整流程：init 子命令、裸索引改写、解析与执行。
+// runSubcommand 处理 argv[1] 上的旁路子命令（init / complete），返回是否已处理。
+// shell 函数会把 --cwd-file 注入到 argv[1]，所以通过 work 调用时这里永远返回 false，
+// 用户写的名字会按项目名解析；子命令只支持直接运行二进制。
+func runSubcommand(args []string, out io.Writer) (bool, error) {
+	if len(args) < 2 {
+		return false, nil
+	}
+	switch args[1] {
+	case "init":
+		return true, shell.Init(args[2:], out)
+	case "complete":
+		return true, completeSubcommand(args[2:], out)
+	}
+	return false, nil
+}
+
+// Main 是命令行的完整流程：init / complete 子命令、裸索引改写、解析与执行。
 func Main(args []string) {
 	// 整个程序直写控制台，先打开 ANSI 解析与 UTF-8 代码页。
 	sysinfo.EnableVT()
 
-	// init 子命令只打印 shell 集成代码，不解析项目参数。
-	if len(args) > 1 && args[1] == "init" {
-		if err := shell.Init(args[2:], os.Stdout); err != nil {
+	// init / complete 都是只读旁路，不解析项目参数。
+	// shell 函数会把 --cwd-file 放在最前面，所以 `work init` / `work complete`
+	// 里的名字仍是项目名，不会走到这里。
+	if handled, err := runSubcommand(args, os.Stdout); handled {
+		if err != nil {
 			sysinfo.Fail(err, 2, false)
 		}
 		return

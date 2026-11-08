@@ -9,7 +9,7 @@
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
 - 只有两个依赖：`golang.org/x/term`（终端宽度判断）与 `golang.org/x/sys`（Windows 控制台、磁盘空间）。
 - 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`ansi`、`cli`、`config`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
-- shell 侧只有一层壳：`gowork init <shell>` 打印函数代码，用户在配置里 `eval` / `source`。
+- shell 侧只有一层壳：`gowork init <shell>` 打印函数代码（zsh 还带补全），用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
 
 为什么必须有 shell 侧：子进程改不了父进程的工作目录。gowork 把目标目录写进
@@ -21,8 +21,9 @@
 1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`；PowerShell 只翻译
    `-Project` / `-IndentSize` / `-Workspace`，其余参数原样透传。
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
-3. `cli.Main`：`sysinfo.EnableVT()` → 若 `os.Args[1] == "init"` 走 `shell.Init` 直接返回 →
-   `config.Load()` → `NormalizeArgs`（先展开短选项，再改写裸 `-N`）→ `parseWith`。
+3. `cli.Main`：`sysinfo.EnableVT()` → `runSubcommand` 按 `os.Args[1]` 处理
+   `init` / `complete` 并直接返回 → `config.Load()` →
+   `NormalizeArgs`（先展开短选项，再改写裸 `-N`）→ `parseWith`。
 4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New` → `project.List` →
    若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
 5. `render.Renderer.Render`：清屏、窗口标题、logo、仪表盘、格言，最后是提示。
@@ -30,9 +31,9 @@
 7. 失败统一走 `sysinfo.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
    **不切换目录**。
 
-注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` 里的 `init`
-是**项目名**（`flag.Arg(0)`），不会触发 init 子命令；只有直接运行
-`gowork init <shell>`（`init` 位于 `argv[1]`）才输出集成代码。
+注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` / `work complete`
+是**项目名**（`flag.Arg(0)`），不会触发子命令；只有直接运行 `gowork init <shell>`
+或 `gowork complete projects`（子命令位于 `argv[1]`）才走旁路。
 
 ## 目录结构
 
@@ -40,13 +41,13 @@
 cmd/gowork/            入口，只把 os.Args 交给 internal/cli
 internal/
   ansi/                ANSI 前景色常量与主色调色板
-  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs → --recent）、编排（Main / Run）
+  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs → --recent）、编排（Main / Run）、complete 子命令
   config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
   project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
   render/              仪表盘渲染、ANSI 使用、row / rule / printRecent、宽度计算与截断
   holiday/             接口请求、事件整理与挑选、缓存、节日图标、"节日"行文案
   clone/               地址识别、仓库名推断与校验、git clone 直连控制台
-  shell/               Init（switch）、三份 shell 模板
+  shell/               Init（switch）、sh / fish / powershell / zsh 模板（zsh 含补全）
   sysinfo/             ColorEnabled、Fail、TerminalWidth（跨平台）
 install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提示；不改用户环境
 .github/workflows/     ci.yml（三平台测试 + shell 预检）、release.yml（v* 标签发布）
@@ -118,6 +119,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   提示；选项重排后，位置参数之后的选项也会算，`--` 之后的位置参数不算。
   `cwd-file`（shell 自动注入）与 `help` 不提示。
   提示按用户实际拼写的选项名比较目录名，消歧写法是 `work ./<选项名>`。
+  `complete` 是只给补全用的内部旁路，不参与同名提示。
 
 ### 仓库地址与克隆
 
@@ -177,13 +179,22 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 ### shell 集成
 
 - 入口：`gowork init <shell>`；`shell` 大小写不敏感，`powershell` / `pwsh`、
-  `sh` / `bash` / `zsh` / `posix`、`fish`。参数缺失或未知 shell 退出码 2。
-- 三份模板都在 `internal/shell/shell.go` 的 raw string 里；模板里外部命令统一加 `command` 前缀，
+  `zsh`、`sh` / `bash` / `posix`、`fish`。参数缺失或未知 shell 退出码 2。
+  `zsh` 输出 sh 函数体 + 补全；`sh` 仍接受 zsh，但不含补全（保持向后兼容）。
+- 模板都在 `internal/shell/shell.go` 的 raw string 里：`shWorkFunc` 是三个类 Unix shell
+  共用的函数体，`initSH` / `initZsh` 各自拼上头部与（zsh 的）补全；
+  模板里外部命令统一加 `command` 前缀，
   PowerShell 的 cmdlet 用模块全名（`Microsoft.PowerShell.Management\...`），
   避免被用户别名或同名函数劫持。
 - POSIX：`local` + `mktemp` + `command cat` + `\cd --`，返回二进制的退出码；
   找不到二进制返回 127，临时文件失败返回 1。
 - fish：存在性用 `command -sq`，外部命令同样 `command` 前缀。
+- zsh：在 `shWorkFunc` 后追加 `_gowork` 补全与 `compdef _gowork work`。候选项目名来自
+  `gowork complete projects`（每行一个，按 `project.List` 的最近修改倒序）。
+  补全用 `_arguments` 描述选项；裸 `-N` 在调用 `_arguments` 前单独拦下，否则会被当成
+  未知选项。`compdef` 由 `compinit` 定义，模板用 `(( $+functions[compdef] ))` 守卫，
+  没加载 compinit 时静默跳过；不自动替用户跑 compinit。
+  组合短选项（`-ni5`）、紧凑取值（`-pfoo`）与 `--` 之后的字面参数不做补全。
 - PowerShell：`function global:work` **不用 `param` 块**——用了会把 `--indent 5` 的
   `--indent` 绑到第一个位置参数，原生参数无法透传；没有 param 块时所有实参都在 `$args`。
   脚本只把 Windows 写法 `-Project` / `-IndentSize` / `-Workspace`（含 `-Proj` / `-Ind` /
@@ -218,8 +229,10 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   只装二进制，跳过下面所有环境修改。
 - PATH 与集成（POSIX）：按 `$SHELL` 选 rc——zsh `~/.zshrc`、bash `~/.bashrc`（macOS 为
   `~/.bash_profile`）、fish `${XDG_CONFIG_HOME:-~/.config}/fish/config.fish`、sh/dash `~/.profile`；
+  写入的 hook 分别是 `init zsh` / `init sh` / `init fish`。zsh 用 `init zsh` 才有补全。
   识别不了就只打印手动步骤。写入块以 `# >>> gowork installer >>>` 标记，已有标记就整体跳过；
   目录已在 `$PATH` 或 rc 里出现时不重复追加；写入前 `mkdir -p` 父目录。
+  旧块里的 `init sh` 不会被自动改成 `init zsh`，这是刻意保持的向后兼容。
 - PATH 与集成（Windows）：用 `[Environment]::SetEnvironmentVariable('Path', ..., 'User')` 追加
   用户 PATH（不用 `setx`，避开长度截断），同时更新当前进程 `$env:Path`；`$PROFILE` 追加纯 ASCII
   集成块。profile 是 UTF-16 时不自动写，改为打印手动步骤，避免混合编码。
@@ -260,8 +273,17 @@ go test ./...
   - 各 shell 名称、别名、大小写、错误参数；
   - `TestScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell
     解析，缺哪个就 skip；bash 系用 `-n`，PowerShell 用 `Parser::ParseFile`。
+    其中 `{"zsh","zsh"}` 专门解析带补全的 zsh 模板。
+  - `TestZshTemplateIncludesCompletion` / `TestShTemplateHasNoCompletion` 钉住
+    「zsh 有补全、sh 没有」的分工。
+  - `TestZshCompletionRegisters` 在真实 zsh 里先 `compinit` 再执行模板，确认
+    `_comps[work] == _gowork`；没装 zsh 就 skip。
   - PowerShell 检查写临时文件（UTF-8 带 BOM），**不能走 stdin**（见坑 1）。
   - `TestCheckPowerShellDetectsError` 用坏脚本确认检查不是空转。
+- `internal/cli/complete_test.go`：`writeProjectNames` 的输出顺序（最近修改在前）、
+  隐藏目录/文件跳过、工作区不存在时无输出；`completeSubcommand` 的用法错误与
+  环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令只在 `argv[1]` 生效，
+  shell 注入 `--cwd-file` 后 `complete` / `init` 按项目名处理。
 - `internal/project/project_test.go`：
   - `TestListFollowsDirLink` 直接建目录符号链接；Windows 上失败时启用
     `SeCreateSymbolicLinkPrivilege` 重试，仍建不了就 skip，不退回目录联接。
@@ -299,8 +321,9 @@ go test ./...
    解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
    不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
    （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
-8. **`init` 子命令只在 `argv[1]` 时生效**。shell 函数总把 `--cwd-file` 放最前面，
-   所以 `work init` 是项目名；不要据此认为「`work init` 会打印脚本」。
+8. **子命令只在 `argv[1]` 时生效**（`init`、`complete`）。shell 函数总把 `--cwd-file`
+   放最前面，所以 `work init` / `work complete` 是项目名；不要据此认为「`work init`
+   会打印脚本」。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
    也因此 `$x = work` 捕获不到仪表盘（这是预期行为）。
 10. **沙箱内跑测试会假失败**。凡是起 `git` 子进程或依赖临时目录权限的用例，都要在沙箱外执行。
@@ -315,10 +338,16 @@ go test ./...
     `go.mod` / `go.sum` 为 LF。
 16. **EXIT trap 的最后一条命令决定退出码**。`[ -n "$tmp_dir" ] && rm -rf ...` 在变量为空时
     返回 1，会把成功退出的脚本变成失败；trap 里用 `if`，不要用 `&&`。
+17. **zsh 补全里的裸 `-N` 必须先拦下**。`_arguments` 会把 `-1` 当未知选项，
+   所以模板在调用 `_arguments` 前用 `[[ $words[CURRENT] == -[0-9]* ]]` 单独给
+   `-1..-N`。另外 `compdef` 只有加载 `compinit` 后才存在：不要自动替用户跑 compinit，
+   也不要在未加载时打印错误，否则会污染 shell 启动。补全候选来自
+   `gowork complete projects`，失败时靠 `2>/dev/null` 静默。
 
 ## 改动时的连带点
 
 - 加 shell：`internal/shell/shell.go` 的 switch、模板、`shell_test.go` 用例、CI 安装与预检、README 的平台说明。
+  若 shell 自带补全（如 zsh），同步 `complete` 子命令的候选类型与 `TestScriptSyntax` 的解析用例。
   PowerShell 系模板的输出必须纯 ASCII（`TestPowerShellTemplateIsASCII` 会拦），原因见坑 1。
 - 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
   其余逻辑必须能在任意平台 `go test`。
@@ -328,7 +357,12 @@ go test ./...
   `--help` 里补说明。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
-- 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`。
+- 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；
+  子命令统一在 `runSubcommand` 里按 `args[1]` 分派（`Main` 只调用它）。shell 函数总把
+  `--cwd-file` 注入到 `argv[1]`，所以 `work <名字>` 永远到不了子命令——这是刻意的：
+  加子命令默认不需要改 shell 模板。只有当子命令必须能通过 `work` 调用时，才要改所有
+  shell 模板（sh / zsh / fish / powershell），并补对应 shell 测试。
+  新增只读旁路时优先复用 `config.Load` + `project.List`。
 - 改 release 产物命名或打包结构：同步 `install.sh` / `install.ps1` 的资产名拼接、解压路径，
   以及 `checksums.txt` 的校验逻辑。
 - 改安装脚本的 PATH / shell 配置行为：同步 README 的「自动修改的位置」、本节说明与标记块格式。

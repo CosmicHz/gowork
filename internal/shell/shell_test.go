@@ -171,6 +171,118 @@ func TestInit(t *testing.T) {
 	}
 }
 
+// TestZshTemplateIncludesCompletion 锁定 zsh 模板包含补全所需的全部要素。
+func TestZshTemplateIncludesCompletion(t *testing.T) {
+	s, ok := template("zsh")
+	if !ok {
+		t.Fatal("缺少 zsh 模板")
+	}
+	for _, want := range []string{
+		"work()",
+		"_gowork()",
+		"_arguments",
+		"complete projects",
+		"compdef _gowork work",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("zsh 模板缺少 %q：\n%s", want, s)
+		}
+	}
+}
+
+// TestShTemplateHasNoCompletion 保证 init sh 保持原样，不把 zsh 专用语法带进去。
+func TestShTemplateHasNoCompletion(t *testing.T) {
+	s, ok := template("sh")
+	if !ok {
+		t.Fatal("缺少 sh 模板")
+	}
+	for _, unwanted := range []string{"compdef", "_gowork", "_arguments"} {
+		if strings.Contains(s, unwanted) {
+			t.Errorf("init sh 不应包含 %q：\n%s", unwanted, s)
+		}
+	}
+}
+
+// TestZshCompletionRegisters 在真实 zsh 里加载 compinit 后执行模板，
+// 确认 work 被注册到 _gowork。没装 zsh 就跳过（CI 会装）。
+func TestZshCompletionRegisters(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("未安装 zsh")
+	}
+	script, ok := template("zsh")
+	if !ok {
+		t.Fatal("缺少 zsh 模板")
+	}
+
+	check := `autoload -Uz compinit && compinit -u -d "$PWD/zcompdump"
+` + script + `
+[[ ${_comps[work]} == _gowork ]] || { print -r -- "work 未注册到 _gowork: ${_comps[work]}" >&2; exit 1 }
+whence -w work
+whence -w _gowork
+`
+
+	cmd := exec.Command("zsh", "-df")
+	cmd.Dir = t.TempDir()
+	cmd.Stdin = strings.NewReader(check)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh 加载模板失败：%v\n%s", err, out)
+	}
+	for _, want := range []string{"work: function", "_gowork: function"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+}
+
+// TestZshCompletionSuggestsIndexes 用一个假的 gowork 提供两个项目，
+// 确认裸 -N 分支给出 -1、-2 而不是把 -1 交给 _arguments。
+func TestZshCompletionSuggestsIndexes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上没有可直接执行的 zsh 测试环境")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("未安装 zsh")
+	}
+	script, ok := template("zsh")
+	if !ok {
+		t.Fatal("缺少 zsh 模板")
+	}
+
+	fake := filepath.Join(t.TempDir(), "gowork")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf 'alpha\\nbeta\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	harness := "export GOWORK_BIN=" + shQuote(fake) + "\n" + script + `
+compadd() { print -r -- "CAND:$@" }
+words=(work -1)
+CURRENT=2
+_gowork
+`
+
+	cmd := exec.Command("zsh", "-df")
+	cmd.Stdin = strings.NewReader(harness)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("执行补全函数失败：%v\n%s", err, out)
+	}
+	got := string(out)
+	for _, want := range []string{"CAND:-U -- -1", "CAND:-U -- -2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("输出缺少 %q：\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "-3") {
+		t.Errorf("只有两个项目，不该补 -3：\n%s", got)
+	}
+}
+
+// shQuote 把字符串包成 POSIX shell 单引号字面量。
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func TestInitErrors(t *testing.T) {
 	cases := []struct {
 		desc string
@@ -216,6 +328,7 @@ func TestScriptSyntax(t *testing.T) {
 		{"sh", "bash"},
 		{"sh", "zsh"},
 		{"sh", "dash"},
+		{"zsh", "zsh"},
 		{"fish", "fish"},
 		{"powershell", "pwsh"},
 		{"powershell", "powershell"},

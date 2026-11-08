@@ -7,12 +7,15 @@ import (
 	"strings"
 )
 
-// template 返回 shell 名称对应的集成代码。bash / zsh / POSIX sh 的函数体相同。
+// template 返回 shell 名称对应的集成代码。bash / POSIX sh 共用 initSH；
+// zsh 另有自动补全支持（initZsh）。
 func template(shell string) (string, bool) {
 	switch strings.ToLower(shell) {
 	case "powershell", "pwsh":
 		return initPowerShell, true
-	case "sh", "bash", "zsh", "posix":
+	case "zsh":
+		return initZsh, true
+	case "sh", "bash", "posix":
 		return initSH, true
 	case "fish":
 		return initFish, true
@@ -24,18 +27,19 @@ func template(shell string) (string, bool) {
 // 由用户在 shell 配置里 eval / source 这段输出。
 func Init(args []string, out io.Writer) error {
 	if len(args) != 1 {
-		return fmt.Errorf("用法: gowork init <shell>\n可用: powershell、sh（bash / zsh / POSIX）、fish")
+		return fmt.Errorf("用法: gowork init <shell>\n可用选项: powershell、zsh（含补全）、sh（bash / POSIX，zsh 也可用）、fish")
 	}
 	s, ok := template(args[0])
 	if !ok {
-		return fmt.Errorf("不支持的 shell：%s\n可用: powershell、sh（bash / zsh / POSIX）、fish", args[0])
+		return fmt.Errorf("不支持的 shell：%s\n可用选项: powershell、zsh（含补全）、sh（bash / POSIX，zsh 也可用）、fish", args[0])
 	}
 	fmt.Fprint(out, s)
 	return nil
 }
 
-const initSH = `# 由 gowork init sh 生成；bash / zsh / POSIX sh 通用。
-work() {
+// shWorkFunc 是 bash / zsh / POSIX sh 共用的 work 函数体，不含头部注释。
+// initSH 与 initZsh 各自加上自己的头部，保证 `init sh` 的输出保持原样。
+const shWorkFunc = `work() {
     local bin cwd_file rc
     bin=${GOWORK_BIN:-gowork}
 
@@ -60,6 +64,64 @@ work() {
     command rm -f "$cwd_file"
     return "$rc"
 }
+`
+
+const initSH = "# 由 gowork init sh 生成；bash / zsh / POSIX sh 通用。\n" + shWorkFunc
+
+// initZsh 在 sh 函数体之后追加补全：项目名由 `gowork complete projects` 动态提供，
+// 选项与取值按 gowork 的参数表描述。只注册 work，不碰 gowork 可执行文件本身。
+//
+// compdef 由 compinit 定义；用户没加载 compinit 时静默跳过，避免在启动时打印错误。
+// 裸 -N 不是 _arguments 认得的选项，所以先自己拦下来，给出 -1..-N 的候选。
+const initZsh = "# 由 gowork init zsh 生成；包含 work 函数与补全。\n" + shWorkFunc + `
+# ---- zsh 补全 ----
+_gowork() {
+    emulate -L zsh
+
+    local -a projects
+    local name
+    for name in "${(@f)$(command "${GOWORK_BIN:-gowork}" complete projects 2>/dev/null)}"; do
+        [[ -n $name ]] && projects+=("$name")
+    done
+
+    # 裸 -N 是索引写法，_arguments 会把它当未知选项；这里直接给 -1..-N。
+    if [[ $words[CURRENT] == -[0-9]* ]]; then
+        local i
+        for (( i = 1; i <= $#projects && i <= 10; i++ )); do
+            compadd -U -- "-$i"
+        done
+        return
+    fi
+
+    _arguments -s -S \
+        '(-p --project)'{-p,--project}'[跳转到指定项目]:项目:->projects' \
+        '--recent[按最近修改排序的第 N 个]:N:->recent' \
+        '(-i --indent)'{-i,--indent}'[左侧缩进空格数，最小 3]:N:->indent' \
+        '(-w --workspace)'{-w,--workspace}'[本次使用的工作区]:目录:_files -/' \
+        '(-n --no-color)'{-n,--no-color}'[禁用 ANSI 颜色]' \
+        '(-h --help)'{-h,--help}'[输出帮助]' \
+        '(-c --cwd-file)'{-c,--cwd-file}'[成功后把目标目录写入文件]:文件:_files' \
+        '*:项目:->projects'
+
+    case $state in
+    projects)
+        (( $#projects )) && compadd -a projects
+        ;;
+    recent)
+        local i
+        for (( i = 1; i <= $#projects && i <= 10; i++ )); do
+            compadd -- "$i"
+        done
+        ;;
+    indent)
+        compadd -- 3 4 5 6 7 8 9 10
+        ;;
+    esac
+}
+
+if (( $+functions[compdef] )); then
+    compdef _gowork work
+fi
 `
 
 const initFish = `# 由 gowork init fish 生成。

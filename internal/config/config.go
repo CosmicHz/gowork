@@ -113,13 +113,13 @@ func (c Config) Validate() error {
 // ResolveWorkspace 按优先级解析工作区：命令行 > 环境变量 > 配置文件。
 // 三者都没有就报错要求显式配置。
 func (c Config) ResolveWorkspace(flagValue string) (string, error) {
-	if flagValue != "" {
+	if flagValue != "" { // 命令行参数指定
 		return filepath.Clean(flagValue), nil
 	}
-	if env := os.Getenv(workspaceEnv); env != "" {
+	if env := os.Getenv(workspaceEnv); env != "" { // 环境变量指定
 		return filepath.Clean(env), nil
 	}
-	if c.Workspace != "" {
+	if c.Workspace != "" { // 配置文件指定
 		return filepath.Clean(c.Workspace), nil
 	}
 
