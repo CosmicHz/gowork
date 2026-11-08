@@ -23,6 +23,7 @@ type Options struct {
 	Recent    int
 	CwdFile   string
 	Workspace string
+	Help      bool
 	Config    config.Config
 	// Args 是归一化前的原始参数，用于识别“选项名与目录同名”的提示。
 	Args []string
@@ -60,7 +61,7 @@ var (
 	}
 )
 
-// longFlags 是注册过的长选项（不含 flag 包内置的 help）。
+// longFlags 是注册过的长选项。
 var longFlags = map[string]bool{
 	"project":   true,
 	"recent":    true,
@@ -68,6 +69,7 @@ var longFlags = map[string]bool{
 	"cwd-file":  true,
 	"workspace": true,
 	"no-color":  true,
+	"help":      true,
 }
 
 // collisionIgnored 的选项不参与“选项名与目录同名”提示：
@@ -220,7 +222,7 @@ func reorderOption(arg string) (name string, takesValue, known bool) {
 	if i := strings.IndexByte(name, '='); i >= 0 {
 		name = name[:i]
 	}
-	if !longFlags[name] && name != "help" {
+	if !longFlags[name] {
 		return "", false, false
 	}
 	return name, valueFlags["--"+name], true
@@ -409,9 +411,9 @@ func parseWith(fs *flag.FlagSet, args []string, cfg config.Config) (Options, err
 	fs.StringVar(&o.CwdFile, "cwd-file", "", "成功后把目标目录写入该文件，供 shell 函数读取")
 	fs.StringVar(&o.Workspace, "workspace", "", "工作区根目录；留空则依次读环境变量 GOWORK_WORKSPACE 与配置文件")
 	fs.BoolVar(&o.Config.NoColor, "no-color", cfg.NoColor, "禁用 ANSI 颜色")
+	fs.BoolVar(&o.Help, "help", false, "显示帮助并退出")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "用法: gowork [选项] [项目]\n       gowork init <shell>  输出 shell 集成代码\n\n短选项: -p 项目、-i 缩进、-w 工作区、-c cwd 文件、-n 禁用颜色；可组合，如 -ni 5\n        -N 等价于 --recent N\n\n选项:\n")
-		fs.PrintDefaults()
+		writeHelp(fs.Output())
 	}
 
 	// 统一在解析前做参数归一化，同时保留原始 Args 供冲突提示使用。
@@ -421,6 +423,11 @@ func parseWith(fs *flag.FlagSet, args []string, cfg config.Config) (Options, err
 	}
 	o.UsedFlags = make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { o.UsedFlags[f.Name] = true })
+
+	// 帮助优先：同时给了冲突参数或越界值时也直接显示帮助，而不是报错。
+	if o.Help {
+		return o, nil
+	}
 
 	if o.UsedFlags["project"] && o.UsedFlags["recent"] {
 		return o, errors.New("--project 与 --recent 不能同时使用")
@@ -510,6 +517,10 @@ func Main(args []string) {
 	o, err := parseWith(fs, args[1:], cfg)
 	if err != nil {
 		sysinfo.Fail(err, 2, o.Config.NoColor)
+	}
+	if o.Help {
+		writeHelp(os.Stdout)
+		return
 	}
 	if cfgErr != nil {
 		sysinfo.Fail(cfgErr, 1, o.Config.NoColor)

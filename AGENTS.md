@@ -111,6 +111,10 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   cwd 文件、禁用颜色与帮助。布尔项可组合（`-ni 5`、`-ni5`），带值项吃掉组合剩余
   字符或下一个参数；整段出现未知字符时原样保留，交给 `flag` 报错。`--` 作为终止符后不展开；
   如果它是上一个带值选项的值，则继续处理后续参数。
+- 帮助由 `internal/cli/help.go` 手写：GNU 两列排版（左列 ASCII + `<PROJECT>` 占位符），
+  不走 `flag.PrintDefaults`；`-h` / `--help` 置位 `Options.Help`，`Main` 把帮助写 stdout
+  并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通 bool 选项，避免 `flag`
+  的 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
 - `--` 之后的参数都是位置参数；第一个位置参数会被标记为 `ProjectAfterTerminator`，
   `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
   所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
@@ -374,7 +378,7 @@ go test ./...
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。
 - 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；
   加短选项时同步 `shortFlags` / `shortBoolFlags`；同时加进 `longFlags`（重排与同名提示依赖它）；
-  `--help` 里补说明。
+  在 `internal/cli/help.go` 的表格里补说明（帮助是手写的，不走 `flag.PrintDefaults`）。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；

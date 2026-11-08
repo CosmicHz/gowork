@@ -427,3 +427,69 @@ func TestRewriteIndexArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestParseHelp(t *testing.T) {
+	cases := [][]string{
+		{"-h"},
+		{"--help"},
+		{"-nh"},
+		// 帮助优先：冲突参数与越界值都不该挡住帮助。
+		{"-h", "--project", "x", "--recent", "2"},
+		{"-h", "--indent", "1"},
+	}
+	for _, args := range cases {
+		o, err := parseForTest(t, args, config.DefaultConfig())
+		if err != nil {
+			t.Fatalf("解析 %v 失败：%v", args, err)
+		}
+		if !o.Help {
+			t.Errorf("%v 应设置 Help", args)
+		}
+	}
+}
+
+func TestHelpOutput(t *testing.T) {
+	var out bytes.Buffer
+	writeHelp(&out)
+	got := out.String()
+
+	for _, want := range []string{
+		"用法: gowork [选项] [项目]",
+		"gowork init <SHELL>",
+		"-p, --project <PROJECT>",
+		"-N, --recent <N>",
+		"-i, --indent <N>",
+		"-w, --workspace <DIR>",
+		"-n, --no-color",
+		"-h, --help",
+		"init <SHELL>",
+		"powershell、zsh、sh、fish",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("帮助缺少 %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "cwd-file") {
+		t.Errorf("内部选项 cwd-file 不该出现在帮助里\n%s", got)
+	}
+
+	// 所有选项的说明必须从同一列开始。左列保证是 ASCII，所以行内第一个
+	// 非 ASCII 字节就是中文说明的起点。
+	descCol := -1
+	for _, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, "  -") {
+			continue
+		}
+		i := 0
+		for i < len(line) && line[i] < 0x80 {
+			i++
+		}
+		if descCol < 0 {
+			descCol = i
+			continue
+		}
+		if i != descCol {
+			t.Errorf("选项说明应从第 %d 列开始，实际第 %d 列：%q", descCol, i, line)
+		}
+	}
+}
