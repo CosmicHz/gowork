@@ -89,5 +89,10 @@ jobs:
           }
           if ($missing) { exit 1 }
 
+      - name: install.sh 测试
+        if: runner.os != 'Windows'
+        shell: bash
+        run: sh ./install_test.sh
+
       - name: 测试
         run: go run gotest.tools/gotestsum@v1.13.0 --format=testname -- -count=1 ./...

@@ -58,7 +58,11 @@ curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh | s
 2. 装进用户目录；
 3. 把该目录加入用户 PATH，并把 `work` 集成写进当前 shell 的配置。
 
-重复执行会覆盖升级，已配置过的 PATH 与 shell 集成不会重复追加。
+重复执行会覆盖升级，已配置过的 PATH 与 shell 集成不会重复追加。如果已有配置命令里的
+shell 集成命令与当前 shell 不匹配（例如 zsh 里还是 `init sh`），脚本会询问是否换成匹配当前
+shell 的形式（默认换；没有可交互终端时也按默认处理）。如果配置里有多个 gowork 配置命令，
+默认只处理最后一个（因为只有最后一个生效）。先问是否去重（只删前面的，不动最后一个），
+再问是否把最后一个换成匹配当前 shell 的形式。
 
 #### 带参数运行
 
@@ -593,5 +597,3 @@ gowork 会把目标目录写进 `--cwd-file` 指定的临时文件，由 shell �
   此时只显示最近的节日兜底，不按往年规律预测；要补全得自己推算，目前没做。
 - **PowerShell 的 `--`**：PowerShell 脚本会在解析参数时丢掉 `--`，所以终止符与
   `work -- -1` 只在 macOS / Linux 中可用；pwsh 请用 `work ./-1`。
-- **zsh 补全**：`gowork init sh` 不含补全，zsh 用户请改用 `gowork init zsh`；
-  已经写入 `.zshrc` 的旧配置不会被安装脚本自动改写。

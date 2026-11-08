@@ -123,6 +123,194 @@ print_manual() {
     printf '然后重开终端。\n'
 }
 
+# hook_kind_for_shell 返回当前 shell 期望的 init 类型：zsh / fish / sh。
+hook_kind_for_shell() {
+    case "${SHELL##*/}" in
+    zsh) printf 'zsh\n' ;;
+    fish) printf 'fish\n' ;;
+    *) printf 'sh\n' ;;
+    esac
+}
+
+# path_line_for_kind 返回该 init 类型对应的 PATH 配置行。
+path_line_for_kind() {
+    if [ "$1" = fish ]; then
+        printf 'fish_add_path "%s"' "$bin_dir"
+    else
+        printf 'export PATH="%s:$PATH"' "$bin_dir"
+    fi
+}
+
+# hook_line_for_kind 返回该 init 类型对应的集成行。
+hook_line_for_kind() {
+    case "$1" in
+    fish) printf '%s' 'gowork init fish | source' ;;
+    zsh) printf '%s' 'eval "$(gowork init zsh)"' ;;
+    *) printf '%s' 'eval "$(gowork init sh)"' ;;
+    esac
+}
+
+# block_hook_kind 返回最后一个配置命令里的 init 类型；没有配置命令或没有 hook 时输出空。
+# 用 index() 比较标记行，兼容被编辑器转成 CRLF 的 rc。
+block_hook_kind() {
+    awk -v begin="$marker_begin" -v end="$marker_end" '
+        { line = $0 }
+        index(line, begin) == 1 { in_block = 1; kind = ""; next }
+        index(line, end) == 1 { if (in_block) last_kind = kind; in_block = 0; next }
+        in_block && /gowork init fish/ { kind = "fish" }
+        in_block && /gowork init zsh/ { kind = "zsh" }
+        in_block && /gowork init sh/ { kind = "sh" }
+        END { print last_kind }
+    ' "$1"
+}
+
+# block_count 返回配置命令的数量。
+block_count() {
+    awk -v begin="$marker_begin" 'index($0, begin) == 1 { n++ } END { print n + 0 }' "$1"
+}
+
+# block_has_path 判断任意配置命令里是否有 PATH 行。
+block_has_path() {
+    awk -v begin="$marker_begin" -v end="$marker_end" '
+        { line = $0 }
+        index(line, begin) == 1 { in_block = 1; next }
+        index(line, end) == 1 { in_block = 0; next }
+        in_block && (index(line, "export PATH=") > 0 || index(line, "fish_add_path") > 0) { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+# block_has_hook 判断任意配置命令里是否有 init hook。
+block_has_hook() {
+    awk -v begin="$marker_begin" -v end="$marker_end" '
+        { line = $0 }
+        index(line, begin) == 1 { in_block = 1; next }
+        index(line, end) == 1 { in_block = 0; next }
+        in_block && /gowork init (fish|zsh|sh)/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1"
+}
+
+# rewrite_last_block 只改最后一个配置命令：替换其中的 PATH / hook 行，
+# 没有 hook 行时补上；前面的配置命令与文件其它内容不动。
+rewrite_last_block() {
+    rewrite_rc=$1
+    rewrite_kind=$2
+    rewrite_path=$(path_line_for_kind "$rewrite_kind") || return 1
+    rewrite_hook=$(hook_line_for_kind "$rewrite_kind") || return 1
+    rewrite_last=$(block_count "$rewrite_rc") || return 1
+    upgrade_tmp=$(mktemp) || return 1
+    if ! awk -v begin="$marker_begin" -v end="$marker_end" \
+        -v path="$rewrite_path" -v hook="$rewrite_hook" -v last="$rewrite_last" '
+        { line = $0 }
+        index(line, begin) == 1 {
+            block++
+            in_block = 1
+            print
+            next
+        }
+        index(line, end) == 1 {
+            if (in_block && block == last && !hook_done) {
+                print hook
+                hook_done = 1
+            }
+            in_block = 0
+            print
+            next
+        }
+        in_block {
+            if (block == last) {
+                if (index(line, "export PATH=") > 0 || index(line, "fish_add_path") > 0) {
+                    if (!path_done) { print path; path_done = 1 }
+                    next
+                }
+                if (line ~ /gowork init (fish|zsh|sh)/) {
+                    if (!hook_done) { print hook; hook_done = 1 }
+                    next
+                }
+            }
+            print
+            next
+        }
+        { print }
+    ' "$rewrite_rc" >"$upgrade_tmp"; then
+        rm -f "$upgrade_tmp"
+        return 1
+    fi
+    # 用 cat 覆盖，保留原文件的权限与 inode。
+    if ! cat "$upgrade_tmp" >"$rewrite_rc"; then
+        rm -f "$upgrade_tmp"
+        return 1
+    fi
+    rm -f "$upgrade_tmp"
+    return 0
+}
+
+# dedupe_blocks 删除前面的重复配置命令，只保留最后一个；最后一个的内容不动。
+dedupe_blocks() {
+    dedupe_rc=$1
+    dedupe_last=$(block_count "$dedupe_rc") || return 1
+    upgrade_tmp=$(mktemp) || return 1
+    if ! awk -v begin="$marker_begin" -v end="$marker_end" -v last="$dedupe_last" '
+        { line = $0 }
+        index(line, begin) == 1 {
+            block++
+            in_block = 1
+            if (block == last) print
+            next
+        }
+        index(line, end) == 1 {
+            if (in_block && block == last) print
+            in_block = 0
+            next
+        }
+        in_block {
+            if (block == last) print
+            next
+        }
+        { print }
+    ' "$dedupe_rc" >"$upgrade_tmp"; then
+        rm -f "$upgrade_tmp"
+        return 1
+    fi
+    # 用 cat 覆盖，保留原文件的权限与 inode。
+    if ! cat "$upgrade_tmp" >"$dedupe_rc"; then
+        rm -f "$upgrade_tmp"
+        return 1
+    fi
+    rm -f "$upgrade_tmp"
+    return 0
+}
+
+# confirm_action 打印提示并询问，默认同意。
+# curl | sh 时 stdin 是管道，所以从 /dev/tty 读；打不开终端就按默认处理。
+confirm_action() {
+    if ( : </dev/tty ) 2>/dev/null; then
+        printf '%s [Y/n] ' "$1" >&2
+        upgrade_answer=""
+        read -r upgrade_answer </dev/tty 2>/dev/null || upgrade_answer=""
+        case "$upgrade_answer" in
+        "" | [Yy] | [Yy][Ee][Ss]) return 0 ;;
+        *) return 1 ;;
+        esac
+    fi
+    return 0
+}
+
+# confirm_action_no 与 confirm_action 相同，但默认不同意。
+confirm_action_no() {
+    if ( : </dev/tty ) 2>/dev/null; then
+        printf '%s [y/N] ' "$1" >&2
+        upgrade_answer=""
+        read -r upgrade_answer </dev/tty 2>/dev/null || upgrade_answer=""
+        case "$upgrade_answer" in
+        [Yy] | [Yy][Ee][Ss]) return 0 ;;
+        *) return 1 ;;
+        esac
+    fi
+    return 1
+}
+
 # setup_env 把 PATH 与 work 集成写进当前 shell 的 rc；失败只警告，不影响安装。
 setup_env() {
     rc=$(detect_rc) || rc=""
@@ -133,7 +321,47 @@ setup_env() {
     fi
 
     if [ -f "$rc" ] && grep -Fq "$marker_begin" "$rc"; then
-        printf '\n%s 里已有 gowork 安装块，跳过 PATH 与集成配置。\n' "$rc"
+        expected=$(hook_kind_for_shell)
+        count=$(block_count "$rc")
+        current=$(block_hook_kind "$rc")
+        if [ "$count" -gt 1 ]; then
+            target_label='最后一个配置命令'
+        else
+            target_label='配置命令'
+        fi
+
+        if [ "$count" -gt 1 ]; then
+            if [ -z "$current" ]; then
+                printf '\n%s 里有多个配置命令，但最后一个没有 shell 集成命令，跳过去重。\n' "$rc"
+            elif confirm_action_no "检测到 $rc 里有 $count 个 gowork 配置命令；是否去重，只保留最后一个？"; then
+                if dedupe_blocks "$rc"; then
+                    printf '\n已去掉 %s 里多余的 gowork 配置命令，只保留最后一个。\n' "$rc"
+                else
+                    printf '\n无法去重 %s，请手动只保留最后一个配置命令。\n' "$rc"
+                fi
+            else
+                printf '\n保留 %s 里的 %s 个 gowork 配置命令。\n' "$rc" "$count"
+            fi
+        fi
+
+        if [ -n "$current" ] && [ "$current" != "$expected" ]; then
+            if confirm_action "检测到 $rc 里的${target_label}是 init $current，当前 shell 需要 init $expected；是否换掉？"; then
+                if rewrite_last_block "$rc" "$expected"; then
+                    printf '\n已把 %s 里的%s从 init %s 换成 init %s。\n' "$rc" "$target_label" "$current" "$expected"
+                else
+                    printf '\n无法更新 %s，请手动把%s改成 init %s。\n' "$rc" "$target_label" "$expected"
+                fi
+            else
+                printf '\n保留 %s 里的%s（init %s）；要匹配当前 shell 请手动改成 init %s。\n' "$rc" "$target_label" "$current" "$expected"
+            fi
+            return
+        fi
+
+        if [ "$count" -gt 1 ]; then
+            return
+        fi
+
+        printf '\n%s 里已有 gowork 配置命令，跳过 PATH 与集成配置。\n' "$rc"
         return
     fi
 
@@ -289,6 +517,7 @@ install_from_release() {
     chmod 755 "$bin_dir/gowork"
 }
 
+# ---- 主流程 ----
 while [ "$#" -gt 0 ]; do
     case "$1" in
     --bin-dir)

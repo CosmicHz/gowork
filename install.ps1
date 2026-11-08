@@ -187,7 +187,7 @@ function Add-UserPath {
     return $changed
 }
 
-# Add-ShellHook 往 $PROFILE 追加一个带标记的集成块。
+# Add-ShellHook 往 $PROFILE 追加一段带标记的配置命令。
 # 返回 added / exists / utf16 / skipped，由调用方决定怎么提示。
 function Add-ShellHook {
     $profilePath = $PROFILE

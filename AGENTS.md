@@ -50,6 +50,7 @@ internal/
   shell/               Init（switch）、sh / fish / powershell / zsh 模板（zsh 含补全）
   sysinfo/             ColorEnabled、Fail、TerminalWidth（跨平台）
 install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提示；不改用户环境
+install_test.sh            安装脚本的配置命令识别、替换与去重测试
 .github/workflows/     ci.yml（三平台测试 + shell 预检）、release.yml（v* 标签发布）
 ```
 
@@ -181,6 +182,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - 入口：`gowork init <shell>`；`shell` 大小写不敏感，`powershell` / `pwsh`、
   `zsh`、`sh` / `bash` / `posix`、`fish`。参数缺失或未知 shell 退出码 2。
   `zsh` 输出 sh 函数体 + 补全；`sh` 仍接受 zsh，但不含补全（保持向后兼容）。
+- 这里的 hook 指配置命令里的 shell 集成行（`eval "$(gowork init sh|zsh)"` /
+  `gowork init fish | source`），它负责定义 `work` 函数。
 - 模板都在 `internal/shell/shell.go` 的 raw string 里：`shWorkFunc` 是三个类 Unix shell
   共用的函数体，`initSH` / `initZsh` 各自拼上头部与（zsh 的）补全；
   模板里外部命令统一加 `command` 前缀，
@@ -230,12 +233,23 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - PATH 与集成（POSIX）：按 `$SHELL` 选 rc——zsh `~/.zshrc`、bash `~/.bashrc`（macOS 为
   `~/.bash_profile`）、fish `${XDG_CONFIG_HOME:-~/.config}/fish/config.fish`、sh/dash `~/.profile`；
   写入的 hook 分别是 `init zsh` / `init sh` / `init fish`。zsh 用 `init zsh` 才有补全。
-  识别不了就只打印手动步骤。写入块以 `# >>> gowork installer >>>` 标记，已有标记就整体跳过；
-  目录已在 `$PATH` 或 rc 里出现时不重复追加；写入前 `mkdir -p` 父目录。
-  旧块里的 `init sh` 不会被自动改成 `init zsh`，这是刻意保持的向后兼容。
+  识别不了就只打印手动步骤。写入的配置命令以 `# >>> gowork installer >>>` 标记；已有标记时
+  不重复追加，只检查这些配置命令里的 hook 是否匹配当前 shell。目录已在 `$PATH` 或 rc 里出现时不重复
+  追加；写入前 `mkdir -p` 父目录。
+  配置命令里的 hook 与当前 shell 不匹配时（如 zsh 里还是 `init sh`），会询问是否换成匹配
+  的形式（默认换，从 `/dev/tty` 读输入；打不开终端按默认换）。替换只发生在这些配置命令内，
+  文件其它内容不动。
+  有多个配置命令时，默认不去重，只改最后一个（只有最后一个 hook 生效）。先问是否去重
+  （默认不去重，只删前面的，不动最后一个），再单独问是否把最后一个换成匹配当前 shell（默认换）；两步独立。
+- 升级配置命令：`hook_kind_for_shell` / `block_hook_kind`（最后一个配置命令的类型）/
+  `block_count` / `block_has_path` / `block_has_hook` / `confirm_action`（默认同意）/
+  `confirm_action_no`（默认拒绝）/ `rewrite_last_block` / `dedupe_blocks`。
+  `rewrite_last_block` 只改最后一个配置命令；`dedupe_blocks` 保留最后一个并删除前面的重复项。
+  `curl | sh` 时 stdin 是管道，所以 prompt 必须读 `/dev/tty`，不能直接 `read` 标准输入。
+  去重提示默认不去重；最后一个是否替换的提示默认换，两个问题独立。
 - PATH 与集成（Windows）：用 `[Environment]::SetEnvironmentVariable('Path', ..., 'User')` 追加
   用户 PATH（不用 `setx`，避开长度截断），同时更新当前进程 `$env:Path`；`$PROFILE` 追加纯 ASCII
-  集成块。profile 是 UTF-16 时不自动写，改为打印手动步骤，避免混合编码。
+  配置命令。profile 是 UTF-16 时不自动写，改为打印手动步骤，避免混合编码。
 - 自动配置失败只警告并打印手动步骤，不影响二进制安装；重复执行是幂等的。
 - PowerShell 里用 `throw` 而不是 `exit`：脚本常以 `irm ... | iex` 形式跑在当前会话，
   `exit` 会把终端一起关掉。
@@ -249,6 +263,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   PowerShell 5.1 / 7 与 Git Bash；逐个 `command -v` / `Get-Command`，缺失直接失败。
 - 测试用 `go run gotest.tools/gotestsum@v1.13.0 --format=testname -- -count=1 ./...`：
   `go run` 不依赖 `GOPATH/bin` 在 PATH 上，版本固定；摘要会列出 skipped 数量。
+- 非 Windows 平台额外跑 `sh ./install_test.sh`，覆盖 `install.sh` 的配置命令识别与替换。
 - `release.yml`：push `v*` 标签触发；先在 ubuntu 跑 vet + 测试，再交叉编译
   linux/darwin/windows × amd64/arm64 六个产物（`./cmd/gowork`）；`-trimpath -ldflags '-s -w'`；
   tar.gz（Windows 为 zip），命名 `gowork_<版本>_<系统>_<架构>`；
@@ -284,6 +299,9 @@ go test ./...
   隐藏目录/文件跳过、工作区不存在时无输出；`completeSubcommand` 的用法错误与
   环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令只在 `argv[1]` 生效，
   shell 注入 `--cwd-file` 后 `complete` / `init` 按项目名处理。
+- `install_test.sh`（仓库根目录）：不执行安装，只 source `install.sh` 里
+  `# ---- 主流程 ----` 之前的函数；覆盖 hook 类型识别、配置命令检测、只改最后一个与去重
+  （含 CRLF），以及无终端时 `setup_env` 默认只改最后一个。有可用终端时跳过 `setup_env` 用例，避免阻塞。
 - `internal/project/project_test.go`：
   - `TestListFollowsDirLink` 直接建目录符号链接；Windows 上失败时启用
     `SeCreateSymbolicLinkPrivilege` 重试，仍建不了就 skip，不退回目录联接。
@@ -347,6 +365,8 @@ go test ./...
 ## 改动时的连带点
 
 - 加 shell：`internal/shell/shell.go` 的 switch、模板、`shell_test.go` 用例、CI 安装与预检、README 的平台说明。
+  同步 `install.sh` 的 `hook_kind_for_shell` / `path_line_for_kind` / `hook_line_for_kind`
+  与 `install_test.sh` 的用例。
   若 shell 自带补全（如 zsh），同步 `complete` 子命令的候选类型与 `TestScriptSyntax` 的解析用例。
   PowerShell 系模板的输出必须纯 ASCII（`TestPowerShellTemplateIsASCII` 会拦），原因见坑 1。
 - 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
@@ -365,7 +385,7 @@ go test ./...
   新增只读旁路时优先复用 `config.Load` + `project.List`。
 - 改 release 产物命名或打包结构：同步 `install.sh` / `install.ps1` 的资产名拼接、解压路径，
   以及 `checksums.txt` 的校验逻辑。
-- 改安装脚本的 PATH / shell 配置行为：同步 README 的「自动修改的位置」、本节说明与标记块格式。
+- 改安装脚本的 PATH / shell 配置行为：同步 README 的「自动修改的位置」、本节说明与配置命令格式。
 
 ## 已知限制
 
