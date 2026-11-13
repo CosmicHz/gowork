@@ -31,6 +31,7 @@ func writeHelp(w io.Writer) {
 	})
 	fmt.Fprint(w, `
 短选项可组合，如 -ni 5；选项可以写在项目名之前或之后。
+项目名只能写一个。
 通过 work 调用时 init 会被当作项目名，子命令需直接运行 gowork。
 `)
 }

@@ -363,8 +363,8 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 选项可以写在项目名之前或之后：`work my-app -n` 与 `work -n my-app` 等价。
 
-`--` 之后的参数不再按选项解析，而是作为位置参数：`work -- --no-color` 会去找名为
-`--no-color` 的项目，不会关闭颜色；位置参数只取第一个作为项目名。
+`--` 之后的参数不再按选项解析，而是当作项目名：`work -- --no-color` 会去找名为
+`--no-color` 的项目，不会关闭颜色；项目名只能写一个，多写会报错。
 
 > [!important]
 > 在 PowerShell 中， `--` 无效。
@@ -426,7 +426,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
       要进入该目录请写 work ./-n
 ```
 
-`--cwd-file` 由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的位置参数也不参与。
+`--cwd-file` 由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的参数也不参与。
 
 ### 仓库地址
 

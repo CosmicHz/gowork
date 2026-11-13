@@ -28,7 +28,7 @@ type Options struct {
 	Config    config.Config
 	// Args 是归一化前的原始参数，用于识别“选项名与目录同名”的提示。
 	Args []string
-	// UsedFlags 是 pflag 实际解析到的选项（规范名）；位置参数之后的选项也在其中。
+	// UsedFlags 是 pflag 实际解析到的选项（规范名）
 	UsedFlags map[string]bool
 	// ProjectAfterTerminator 表示项目名来自 `--` 之后的第一个位置参数；
 	// 此时按普通名字匹配，不把 -N 解释成索引。
@@ -37,8 +37,8 @@ type Options struct {
 	flags *pflag.FlagSet
 }
 
-// registerFlags 注册全部命令行选项。pflag 负责短选项、组合写法、贴值以及
-// 位置参数之后的选项；-N 改写与同名提示都从这份注册信息读取取值规则。
+// registerFlags 注册全部命令行选项。pflag 负责短选项、组合写法、贴值。
+// -N 改写与同名提示都从这份注册信息读取取值规则。
 func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
 	fs.StringVarP(&o.Project, "project", "p", "", "要跳转的项目：完整名称、唯一前缀、-N（按最近修改排序的第 N 个），或仓库地址（自动克隆后进入）")
 	fs.IntVar(&o.Recent, "recent", 0, "按最近修改排序的第 N 个项目（1 起，等价于 -N）")
@@ -259,6 +259,27 @@ func optionUsed(names []string, used map[string]bool) bool {
 	return false
 }
 
+// recentSelector 返回用户实际写下的“最近项目”写法，供冲突提示使用：
+// 裸索引原样返回 `索引 -2`，显式选项统一说 `--recent`。
+func recentSelector(fs *pflag.FlagSet, args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if project.IndexPattern.MatchString(arg) {
+			return "索引 " + arg
+		}
+		if arg == "--recent" || strings.HasPrefix(arg, "--recent=") {
+			return "--recent"
+		}
+		if optionConsumesNext(fs, arg) && i+1 < len(args) {
+			i++
+		}
+	}
+	return "--recent"
+}
+
 // parseWith 把命令行解析结果与配置默认值合并。数值与开关先取配置文件的值，
 // 命令行显式给定时再覆盖。
 func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, error) {
@@ -279,12 +300,21 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 		return o, nil
 	}
 
+	// 同一方式写了两次：用户指定了多个项目。
+	if rest := fs.Args(); len(rest) > 1 {
+		return o, fmt.Errorf("只能指定一个项目，多写了：%s", strings.Join(rest[1:], "、"))
+	}
+
+	// 两种方式各指定了一次。
 	if o.UsedFlags["project"] && o.UsedFlags["recent"] {
-		return o, errors.New("--project 与 --recent 不能同时使用")
+		return o, errors.New("只能指定一个项目，这次同时用了 --project 和 --recent")
 	}
 	positional := fs.Arg(0)
-	if positional != "" && (o.UsedFlags["project"] || o.UsedFlags["recent"]) {
-		return o, errors.New("项目名不能与 --project 或 --recent 同时使用")
+	if positional != "" && o.UsedFlags["project"] {
+		return o, fmt.Errorf("只能指定一个项目，这次同时用了项目名 %s 和 --project", positional)
+	}
+	if positional != "" && o.UsedFlags["recent"] {
+		return o, fmt.Errorf("只能指定一个项目，这次同时用了项目名 %s 和 %s", positional, recentSelector(fs, args))
 	}
 	if o.UsedFlags["recent"] && o.Recent < 1 {
 		return o, fmt.Errorf("--recent=%d 小于最小值 1", o.Recent)

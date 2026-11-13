@@ -113,7 +113,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
   `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
   bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
-- `--` 之后的参数都是位置参数；第一个位置参数会被标记为 `ProjectAfterTerminator`，
+- `--` 之后的参数都是位置参数（也就是项目名）；项目名只能有一个，多写直接报错并列出多写的部分。
+  第一个位置参数会被标记为 `ProjectAfterTerminator`，
   `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
   所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
   该写法只在直接调用二进制或 POSIX shell 中可用；pwsh 用 `./-1`。
@@ -286,7 +287,8 @@ go test ./...
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
 - `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住位置参数后的选项：
   项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
-  项目名与 `--project` / `--recent` / `-N` 的冲突。
+  项目名与 `--project` / `--recent` / `-N` 的冲突；`TestParseRejectsMultipleProjects`
+  钉住“只能指定一个项目”，且 `-h` 优先于该校验。
 - `internal/shell/shell_test.go`：
   - 各 shell 名称、别名、大小写、错误参数；
   - `TestScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell

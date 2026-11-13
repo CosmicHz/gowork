@@ -121,7 +121,7 @@ func TestParseMarksProjectAfterTerminator(t *testing.T) {
 		{"带值选项的值恰好是 --", []string{"--workspace", "--", "-1"}, "-1", false},
 		{"短选项值恰好是 --", []string{"-w", "--", "-1"}, "-1", false},
 		{"终止符后的长选项写法", []string{"--", "--no-color"}, "--no-color", true},
-		{"项目名之后的选项不改变字面判定", []string{"my-app", "-n", "--", "-1"}, "my-app", false},
+		{"项目名之后的选项不改变字面判定", []string{"my-app", "-n"}, "my-app", false},
 	}
 
 	for _, c := range cases {
@@ -336,23 +336,81 @@ func TestParseRejectsUnknownOptionAfterProject(t *testing.T) {
 	}
 }
 
+func TestParseRejectsMultipleProjects(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"两个项目名", []string{"my-app", "other"}, "other"},
+		{"三个项目名", []string{"my-app", "other", "third"}, "other、third"},
+		{"终止符之后", []string{"--", "-1", "-2"}, "-2"},
+		{"终止符之前之后", []string{"my-app", "--", "other"}, "other"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := parseForTest(t, c.args, config.DefaultConfig())
+			if err == nil {
+				t.Fatal("多个项目名应报错")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("错误信息应列出多写的项目 %q：%v", c.want, err)
+			}
+		})
+	}
+
+	// 单个项目名不受影响。
+	o, err := parseForTest(t, []string{"my-app"}, config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("单个项目名不该报错：%v", err)
+	}
+	if o.Project != "my-app" {
+		t.Errorf("项目名 = %q，想要 my-app", o.Project)
+	}
+
+	// 帮助优先于项目名校验。
+	o, err = parseForTest(t, []string{"-h", "my-app", "other"}, config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("带 -h 时不该报错：%v", err)
+	}
+	if !o.Help {
+		t.Error("应设置 Help")
+	}
+}
+
 func TestParseRejectsProjectWithTargetFlag(t *testing.T) {
 	cases := []struct {
 		name string
 		args []string
+		want string
 	}{
-		{"项目名之后 --recent", []string{"my-app", "--recent", "2"}},
-		{"项目名之后 --project", []string{"my-app", "--project", "other"}},
-		{"项目名之后 -1", []string{"my-app", "-1"}},
-		{"项目名之前 --recent", []string{"--recent", "2", "my-app"}},
-		{"项目名之前 --project", []string{"--project", "other", "my-app"}},
+		{"项目名之后 --recent", []string{"my-app", "--recent", "2"}, "项目名 my-app 和 --recent"},
+		{"项目名之后 --project", []string{"my-app", "--project", "other"}, "项目名 my-app 和 --project"},
+		{"项目名之后 -1", []string{"my-app", "-1"}, "项目名 my-app 和 索引 -1"},
+		{"项目名之前 --recent", []string{"--recent", "2", "my-app"}, "项目名 my-app 和 --recent"},
+		{"项目名之前 --project", []string{"--project", "other", "my-app"}, "项目名 my-app 和 --project"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := parseForTest(t, c.args, config.DefaultConfig()); err == nil {
+			_, err := parseForTest(t, c.args, config.DefaultConfig())
+			if err == nil {
 				t.Fatal("项目名与目标选项同时出现应报错")
 			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("错误信息应说明用哪两种方式指定了项目（%q）：%v", c.want, err)
+			}
 		})
+	}
+}
+
+func TestParseRejectsTwoTargetFlags(t *testing.T) {
+	_, err := parseForTest(t, []string{"--project", "foo", "--recent", "2"}, config.DefaultConfig())
+	if err == nil {
+		t.Fatal("--project 与 --recent 同时出现应报错")
+	}
+	if want := "同时用了 --project 和 --recent"; !strings.Contains(err.Error(), want) {
+		t.Errorf("错误信息应包含 %q：%v", want, err)
 	}
 }
 
@@ -457,6 +515,7 @@ func TestHelpOutput(t *testing.T) {
 		"-h, --help",
 		"init <SHELL>",
 		"powershell、zsh、sh、fish",
+		"项目名只能写一个",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("帮助缺少 %q\n%s", want, got)
