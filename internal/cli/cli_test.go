@@ -2,10 +2,11 @@ package cli
 
 import (
 	"bytes"
-	"flag"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"gowork/internal/config"
 	"gowork/internal/project"
@@ -13,9 +14,19 @@ import (
 
 func parseForTest(t *testing.T, args []string, cfg config.Config) (Options, error) {
 	t.Helper()
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})
 	return parseWith(fs, args, cfg)
+}
+
+// testFlagSet 返回只用于读取选项元数据的 FlagSet；绑定变量不参与断言。
+func testFlagSet(t *testing.T, cfg config.Config) *pflag.FlagSet {
+	t.Helper()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	o := Options{Config: cfg}
+	registerFlags(fs, &o, cfg)
+	return fs
 }
 
 func TestParseUsesConfigDefaults(t *testing.T) {
@@ -108,6 +119,7 @@ func TestParseMarksProjectAfterTerminator(t *testing.T) {
 		{"终止符后的索引写法按名字", []string{"--", "-1"}, "-1", true},
 		{"短选项后的终止符", []string{"-n", "--", "-1"}, "-1", true},
 		{"带值选项的值恰好是 --", []string{"--workspace", "--", "-1"}, "-1", false},
+		{"短选项值恰好是 --", []string{"-w", "--", "-1"}, "-1", false},
 		{"终止符后的长选项写法", []string{"--", "--no-color"}, "--no-color", true},
 		{"项目名之后的选项不改变字面判定", []string{"my-app", "-n", "--", "-1"}, "my-app", false},
 	}
@@ -126,50 +138,56 @@ func TestParseMarksProjectAfterTerminator(t *testing.T) {
 	}
 }
 
-func TestParseAcceptsSingleDashLongOption(t *testing.T) {
-	o, err := parseForTest(t, []string{"-no-color"}, config.DefaultConfig())
-	if err != nil {
-		t.Fatalf("单横线长选项应被 flag 接受：%v", err)
-	}
-	if !o.Config.NoColor {
-		t.Error("-no-color 应等同于 --no-color")
+func TestParseRejectsSingleDashLongOption(t *testing.T) {
+	if _, err := parseForTest(t, []string{"-no-color"}, config.DefaultConfig()); err == nil {
+		t.Fatal("单横线只表示短选项，-no-color 应报错")
 	}
 }
 
-func TestExpandShortFlags(t *testing.T) {
+func TestParseShorthandForms(t *testing.T) {
 	cases := []struct {
-		desc string
-		in   []string
-		want []string
+		desc  string
+		args  []string
+		check func(Options) bool
 	}{
-		{"单个布尔短选项", []string{"-n"}, []string{"--no-color"}},
-		{"组合两个布尔短选项", []string{"-nh"}, []string{"--no-color", "--help"}},
-		{"布尔加带值的短选项", []string{"-ni", "5"}, []string{"--no-color", "--indent", "5"}},
-		{"带值选项贴着写", []string{"-ni5"}, []string{"--no-color", "--indent=5"}},
-		{"项目短选项独立值", []string{"-p", "my-app"}, []string{"--project", "my-app"}},
-		{"项目短选项贴值", []string{"-pmy-app"}, []string{"--project=my-app"}},
-		{"项目短选项接受负数", []string{"-p-1"}, []string{"--project=-1"}},
-		{"工作区短选项贴值", []string{"-w/tmp/code"}, []string{"--workspace=/tmp/code"}},
-		{"裸索引不是短选项", []string{"-1"}, []string{"-1"}},
-		{"多位索引不是短选项", []string{"-22"}, []string{"-22"}},
-		{"长选项保持原样", []string{"--no-color"}, []string{"--no-color"}},
-		{"单横线长选项保持原样", []string{"-no-color"}, []string{"-no-color"}},
-		{"未知短选项保持原样", []string{"-x"}, []string{"-x"}},
-		{"未知组合保持原样", []string{"-nz"}, []string{"-nz"}},
-		{"空参数", nil, []string{}},
-		{"-- 之后的参数原样保留", []string{"--", "-n", "my-app"}, []string{"--", "-n", "my-app"}},
+		{"独立值", []string{"-p", "my-app"}, func(o Options) bool { return o.Project == "my-app" }},
+		{"贴值", []string{"-pmy-app"}, func(o Options) bool { return o.Project == "my-app" }},
+		{"负值", []string{"-p-1"}, func(o Options) bool { return o.Project == "-1" }},
+		{"等号", []string{"-p=foo"}, func(o Options) bool { return o.Project == "foo" }},
+		{"布尔", []string{"-n"}, func(o Options) bool { return o.Config.NoColor }},
+		{"组合独立值", []string{"-ni", "5"}, func(o Options) bool { return o.Config.NoColor && o.Config.Indent == 5 }},
+		{"组合贴值", []string{"-ni5"}, func(o Options) bool { return o.Config.NoColor && o.Config.Indent == 5 }},
+		{"布尔赋值", []string{"-n=false"}, func(o Options) bool { return !o.Config.NoColor }},
+		{"帮助", []string{"-nh"}, func(o Options) bool { return o.Help }},
 	}
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			if got := ExpandShortFlags(c.in); !slices.Equal(got, c.want) {
-				t.Errorf("ExpandShortFlags(%v) = %v, 想要 %v", c.in, got, c.want)
+			cfg := config.DefaultConfig()
+			cfg.NoColor = true // 让 -n=false 能证明自己生效
+			o, err := parseForTest(t, c.args, cfg)
+			if err != nil {
+				t.Fatalf("解析失败：%v", err)
+			}
+			if !c.check(o) {
+				t.Errorf("%v 未按预期解析：%+v", c.args, o)
 			}
 		})
 	}
 }
 
+func TestShorthandValueAfterProject(t *testing.T) {
+	o, err := parseForTest(t, []string{"my-app", "-i", "5"}, config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if o.Project != "my-app" || o.Config.Indent != 5 {
+		t.Errorf("位置参数后的短选项应生效：project=%q indent=%d", o.Project, o.Config.Indent)
+	}
+}
+
 func TestOptionToken(t *testing.T) {
+	fs := testFlagSet(t, config.DefaultConfig())
 	cases := []struct {
 		arg      string
 		spelling string
@@ -177,22 +195,21 @@ func TestOptionToken(t *testing.T) {
 		ok       bool
 	}{
 		{"-n", "-n", []string{"no-color"}, true},
+		{"-n=false", "-n", []string{"no-color"}, true},
 		{"--no-color", "--no-color", []string{"no-color"}, true},
 		{"--no-color=false", "--no-color", []string{"no-color"}, true},
-		{"-no-color", "-no-color", []string{"no-color"}, true},
 		{"-nh", "-nh", []string{"no-color", "help"}, true},
 		{"--project", "--project", []string{"project"}, true},
 		{"--project=foo", "--project", []string{"project"}, true},
-		{"-project", "-project", []string{"project"}, true},
 		{"--recent", "--recent", []string{"recent"}, true},
 		{"--recent=2", "--recent", []string{"recent"}, true},
-		{"-recent", "-recent", []string{"recent"}, true},
 		{"-p", "-p", []string{"project"}, true},
 		{"-pfoo", "-p", []string{"project"}, true},
 		{"-p-1", "-p", []string{"project"}, true},
 		{"-ni", "-ni", []string{"no-color", "indent"}, true},
 		{"-ni5", "-ni", []string{"no-color", "indent"}, true},
 		{"-c", "-c", []string{"cwd-file"}, true},
+		{"-no-color", "", nil, false},
 		{"-1", "", nil, false},
 		{"my-app", "", nil, false},
 		{"--", "", nil, false},
@@ -203,7 +220,7 @@ func TestOptionToken(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.arg, func(t *testing.T) {
-			spelling, names, ok := optionToken(c.arg)
+			spelling, names, ok := optionToken(fs, c.arg)
 			if ok != c.ok {
 				t.Fatalf("optionToken(%q) ok = %v, 想要 %v", c.arg, ok, c.ok)
 			}
@@ -215,10 +232,10 @@ func TestOptionToken(t *testing.T) {
 }
 
 func TestOptionCollisionWarnings(t *testing.T) {
+	fs := testFlagSet(t, config.DefaultConfig())
 	projects := []project.Project{
 		{Name: "-n"},
 		{Name: "--no-color"},
-		{Name: "-no-color"},
 		{Name: "--project"},
 		{Name: "--recent"},
 		{Name: "-p"},
@@ -236,10 +253,10 @@ func TestOptionCollisionWarnings(t *testing.T) {
 	}{
 		{"短选项", []string{"-n"}, map[string]bool{"no-color": true}, []string{"-n"}},
 		{"长选项", []string{"--no-color"}, map[string]bool{"no-color": true}, []string{"--no-color"}},
-		{"单横线长选项", []string{"-no-color"}, map[string]bool{"no-color": true}, []string{"-no-color"}},
 		{"长选项等号", []string{"--project=foo"}, map[string]bool{"project": true}, []string{"--project"}},
 		{"recent 长选项", []string{"--recent", "2"}, map[string]bool{"recent": true}, []string{"--recent"}},
 		{"短选项贴值", []string{"-pfoo"}, map[string]bool{"project": true}, []string{"-p"}},
+		{"短选项等号", []string{"-p=foo"}, map[string]bool{"project": true}, []string{"-p"}},
 		{"短选项组合", []string{"-ni", "5"}, map[string]bool{"no-color": true, "indent": true}, []string{"-ni"}},
 		{"重复选项去重", []string{"-n", "-n"}, map[string]bool{"no-color": true}, []string{"-n"}},
 		{"cwd-file 不提示", []string{"-c", "x"}, map[string]bool{"cwd-file": true}, nil},
@@ -249,11 +266,12 @@ func TestOptionCollisionWarnings(t *testing.T) {
 		{"-- 后同名选项不提示", []string{"-n", "--", "--no-color"}, map[string]bool{"no-color": true}, []string{"-n"}},
 		{"作为选项值的 token 不提示", []string{"-p", "--no-color"}, map[string]bool{"project": true, "no-color": true}, []string{"-p"}},
 		{"组合选项的值不提示", []string{"-ni", "--no-color"}, map[string]bool{"no-color": true, "indent": true}, []string{"-ni"}},
+		{"单横线不再算长选项", []string{"-no-color"}, map[string]bool{"no-color": true}, nil},
 	}
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			warnings := optionCollisionWarnings(c.args, c.used, projects)
+			warnings := optionCollisionWarnings(fs, c.args, c.used, projects)
 			if len(warnings) != len(c.want) {
 				t.Fatalf("得到 %d 条提示，想要 %d 条：%+v", len(warnings), len(c.want), warnings)
 			}
@@ -288,8 +306,9 @@ func TestInitCollisionWarning(t *testing.T) {
 }
 
 func TestCollisionWarnings(t *testing.T) {
+	fs := testFlagSet(t, config.DefaultConfig())
 	projects := []project.Project{{Name: "init"}, {Name: "-n"}}
-	warnings := collisionWarnings("init", []string{"-n"}, map[string]bool{"no-color": true}, projects)
+	warnings := collisionWarnings(fs, "init", []string{"-n"}, map[string]bool{"no-color": true}, projects)
 	if len(warnings) != 2 {
 		t.Fatalf("应合并 init 与选项名提示，得到 %+v", warnings)
 	}
@@ -307,7 +326,7 @@ func TestOptionsAfterProjectAreParsed(t *testing.T) {
 		t.Fatal("项目名之后的 -n 应生效")
 	}
 	if o.Project != "my-app" {
-		t.Errorf("项目名不应被重排改变：%q", o.Project)
+		t.Errorf("项目名不应被选项解析改变：%q", o.Project)
 	}
 }
 
@@ -350,7 +369,7 @@ func TestParseRecordsRawArgsAndUsedFlags(t *testing.T) {
 		t.Errorf("应记录实际生效的选项：%v", o.UsedFlags)
 	}
 
-	// 参数重排后，位置参数之后的 -n 也会真正进入 flag 解析。
+	// 位置参数之后的 -n 由 pflag 的 interspersed 解析。
 	o, err = parseForTest(t, []string{"my-app", "-n"}, config.DefaultConfig())
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
@@ -359,42 +378,12 @@ func TestParseRecordsRawArgsAndUsedFlags(t *testing.T) {
 		t.Errorf("位置参数之后的选项应算作已使用：%v", o.UsedFlags)
 	}
 	if o.Project != "my-app" {
-		t.Errorf("项目名不应被重排改变：%q", o.Project)
-	}
-}
-
-func TestNormalizeArgs(t *testing.T) {
-	cases := []struct {
-		desc string
-		in   []string
-		want []string
-	}{
-		{"组合短选项后仍改写裸索引", []string{"-n", "-1"}, []string{"--no-color", "--recent=1"}},
-		{"短选项贴值后仍改写裸索引", []string{"-i5", "-2"}, []string{"--indent=5", "--recent=2"}},
-		{"项目短选项的值不能被改写", []string{"-p", "-1"}, []string{"--project", "-1"}},
-		{"贴在一起的项目短选项值也不能被改写", []string{"-p-1"}, []string{"--project=-1"}},
-		{"-- 之后不展开也不改写", []string{"-n", "--", "-n", "-1"}, []string{"--no-color", "--", "-n", "-1"}},
-		{"项目后的布尔选项移到前面", []string{"my-app", "-n"}, []string{"--no-color", "my-app"}},
-		{"项目后的带值选项移到前面", []string{"my-app", "-i", "5"}, []string{"--indent", "5", "my-app"}},
-		{"项目后的贴值选项移到前面", []string{"my-app", "-i5"}, []string{"--indent=5", "my-app"}},
-		{"项目后的值以 - 开头", []string{"my-app", "--workspace", "-foo"}, []string{"--workspace", "-foo", "my-app"}},
-		{"-- 作为选项值时继续展开", []string{"my-app", "--workspace", "--", "-n"}, []string{"--workspace", "--", "--no-color", "my-app"}},
-		{"项目后的未知选项也移到前面", []string{"my-app", "--unknown"}, []string{"--unknown", "my-app"}},
-		{"项目后的索引重排后报冲突", []string{"my-app", "-1"}, []string{"--recent=1", "my-app"}},
-		{"项目后的目标选项也重排", []string{"my-app", "--recent", "2"}, []string{"--recent", "2", "my-app"}},
-		{"-- 之后的重排也停止", []string{"my-app", "-n", "--", "-n", "-1"}, []string{"--no-color", "my-app", "--", "-n", "-1"}},
-	}
-
-	for _, c := range cases {
-		t.Run(c.desc, func(t *testing.T) {
-			if got := NormalizeArgs(c.in); !slices.Equal(got, c.want) {
-				t.Errorf("NormalizeArgs(%v) = %v, 想要 %v", c.in, got, c.want)
-			}
-		})
+		t.Errorf("项目名不应被选项解析改变：%q", o.Project)
 	}
 }
 
 func TestRewriteIndexArgs(t *testing.T) {
+	fs := testFlagSet(t, config.DefaultConfig())
 	cases := []struct {
 		desc string
 		in   []string
@@ -409,10 +398,14 @@ func TestRewriteIndexArgs(t *testing.T) {
 		{"-- 之后的值也不改写", []string{"--", "--project", "-1"}, []string{"--", "--project", "-1"}},
 		{"显式 --project 保持原样", []string{"--project=-1"}, []string{"--project=-1"}},
 		{"--project 的独立值不能改写", []string{"--project", "-1"}, []string{"--project", "-1"}},
+		{"-p 的独立值不能改写", []string{"-p", "-1"}, []string{"-p", "-1"}},
+		{"-p 的贴值不能被改写", []string{"-p-1"}, []string{"-p-1"}},
 		{"--recent 的独立值不能改写", []string{"--recent", "-1"}, []string{"--recent", "-1"}},
 		{"--indent 的独立值不能改写", []string{"--indent", "-5"}, []string{"--indent", "-5"}},
+		{"组合短选项的独立值不能改写", []string{"-ni", "-1"}, []string{"-ni", "-1"}},
 		{"--workspace 的独立值不能改写", []string{"--workspace", "-1"}, []string{"--workspace", "-1"}},
-		{"单横线长选项的值也不能改写", []string{"-project", "-2"}, []string{"-project", "-2"}},
+		{"-w 的独立值不能改写", []string{"-w", "-1"}, []string{"-w", "-1"}},
+		{"短选项值恰好是 --", []string{"-w", "--", "-1"}, []string{"-w", "--", "--recent=1"}},
 		{"普通项目名", []string{"my-app"}, []string{"my-app"}},
 		{"项目名之后的索引也改写", []string{"my-app", "-1"}, []string{"my-app", "--recent=1"}},
 		{"负号但非数字", []string{"-x"}, []string{"-x"}},
@@ -421,7 +414,7 @@ func TestRewriteIndexArgs(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			if got := RewriteIndexArgs(c.in); !slices.Equal(got, c.want) {
+			if got := RewriteIndexArgs(fs, c.in); !slices.Equal(got, c.want) {
 				t.Errorf("RewriteIndexArgs(%v) = %v, 想要 %v", c.in, got, c.want)
 			}
 		})

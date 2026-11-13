@@ -3,11 +3,12 @@ package cli
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/spf13/pflag"
 
 	"gowork/internal/clone"
 	"gowork/internal/config"
@@ -27,49 +28,28 @@ type Options struct {
 	Config    config.Config
 	// Args 是归一化前的原始参数，用于识别“选项名与目录同名”的提示。
 	Args []string
-	// UsedFlags 是 flag 实际解析到的选项（规范名）；重排后项目名之后的选项也在其中。
+	// UsedFlags 是 pflag 实际解析到的选项（规范名）；位置参数之后的选项也在其中。
 	UsedFlags map[string]bool
 	// ProjectAfterTerminator 表示项目名来自 `--` 之后的第一个位置参数；
 	// 此时按普通名字匹配，不把 -N 解释成索引。
 	ProjectAfterTerminator bool
+	// flags 是本次解析用的 FlagSet；同名提示据此读取真实的短选项与取值规则。
+	flags *pflag.FlagSet
 }
 
-// valueFlags 是会用掉下一个参数的非布尔选项。改写 -N 时要跳过它们后面那个值，
-// 否则 `--project -1` 会被误当成裸写的索引而改坏。
-var valueFlags = map[string]bool{
-	"-project": true, "--project": true,
-	"-recent": true, "--recent": true,
-	"-indent": true, "--indent": true,
-	"-cwd-file": true, "--cwd-file": true,
-	"-workspace": true, "--workspace": true,
-}
-
-// 短选项与长选项一一对应。h 没有注册成真正的 flag，交给 flag 包内置的
-// help 处理；这里只负责把它从组合里拆出来。
-var (
-	shortFlags = map[byte]string{
-		'c': "cwd-file",
-		'h': "help",
-		'i': "indent",
-		'n': "no-color",
-		'p': "project",
-		'w': "workspace",
+// registerFlags 注册全部命令行选项。pflag 负责短选项、组合写法、贴值以及
+// 位置参数之后的选项；-N 改写与同名提示都从这份注册信息读取取值规则。
+func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
+	fs.StringVarP(&o.Project, "project", "p", "", "要跳转的项目：完整名称、唯一前缀、-N（按最近修改排序的第 N 个），或仓库地址（自动克隆后进入）")
+	fs.IntVar(&o.Recent, "recent", 0, "按最近修改排序的第 N 个项目（1 起，等价于 -N）")
+	fs.IntVarP(&o.Config.Indent, "indent", "i", cfg.Indent, "左侧缩进空格数")
+	fs.StringVarP(&o.CwdFile, "cwd-file", "c", "", "成功后把目标目录写入该文件，供 shell 函数读取")
+	fs.StringVarP(&o.Workspace, "workspace", "w", "", "工作区根目录；留空则依次读环境变量 GOWORK_WORKSPACE 与配置文件")
+	fs.BoolVarP(&o.Config.NoColor, "no-color", "n", cfg.NoColor, "禁用 ANSI 颜色")
+	fs.BoolVarP(&o.Help, "help", "h", false, "显示帮助并退出")
+	fs.Usage = func() {
+		writeHelp(fs.Output())
 	}
-	shortBoolFlags = map[byte]bool{
-		'h': true,
-		'n': true,
-	}
-)
-
-// longFlags 是注册过的长选项。
-var longFlags = map[string]bool{
-	"project":   true,
-	"recent":    true,
-	"indent":    true,
-	"cwd-file":  true,
-	"workspace": true,
-	"no-color":  true,
-	"help":      true,
 }
 
 // collisionIgnored 的选项不参与“选项名与目录同名”提示：
@@ -79,88 +59,13 @@ var collisionIgnored = map[string]bool{
 	"help":     true,
 }
 
-// ExpandShortFlags 把类 Unix 的短选项写法展开成长选项：
-// `-n` → `--no-color`，`-ni 5` / `-ni5` → `--no-color --indent 5` / `--no-color --indent=5`。
-// 只有整段都由已知短选项组成时才展开。`-1` 交给后面的索引改写；`-no-color` 这类
-// 单横线长选项和未知选项原样保留，由 flag 包处理（flag 同时接受单横线与双横线长选项）。
-// `--` 之后的参数不再展开；但 `--workspace --` 里的 `--` 是选项值，不算终止符。
-func ExpandShortFlags(args []string) []string {
+// RewriteIndexArgs 在解析前把裸写的 -N 改写成 --recent=N，其余参数原样保留。
+// pflag 会把 -1 当成未知 shorthand，所以改写必须先于 Parse；判断某个 token
+// 是否会吃掉下一个参数时直接查 pflag 的注册信息，`-p -1` 的值不会被改坏。
+func RewriteIndexArgs(fs *pflag.FlagSet, args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--" {
-			if i > 0 && valueFlags[args[i-1]] && !strings.Contains(args[i-1], "=") {
-				out = append(out, arg)
-				continue
-			}
-			out = append(out, args[i:]...)
-			break
-		}
-		body, ok := shortBody(arg)
-		if !ok {
-			out = append(out, arg)
-			continue
-		}
-
-		expanded, consumed, ok := expandBundle(body, args, i)
-		if !ok {
-			// 组合里出现未知字符，整段按原样交给 flag 包报错。
-			out = append(out, arg)
-			continue
-		}
-		out = append(out, expanded...)
-		i += consumed
-	}
-	return out
-}
-
-// shortBody 返回单横线短选项的选项体；`--`、单独的 `-` 与 `-N` 索引不在此列。
-func shortBody(arg string) (string, bool) {
-	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
-		return "", false
-	}
-	return arg[1:], true
-}
-
-// expandBundle 展开一段短选项体，返回展开结果与额外消耗的参数个数。
-// 带值选项会吃掉组合剩余部分（贴值）或下一个参数（独立值）；找不到值时就
-// 只输出长选项名，让 flag 包统一报“缺少参数”。
-func expandBundle(body string, args []string, i int) (out []string, consumed int, ok bool) {
-	for j := 0; j < len(body); j++ {
-		c := body[j]
-		name, found := shortFlags[c]
-		if !found {
-			return nil, 0, false
-		}
-
-		if shortBoolFlags[c] {
-			out = append(out, "--"+name)
-			continue
-		}
-
-		if rest := body[j+1:]; rest != "" {
-			return append(out, "--"+name+"="+rest), 0, true
-		}
-		if i+1 < len(args) {
-			return append(out, "--"+name, args[i+1]), 1, true
-		}
-		return append(out, "--"+name), 0, true
-	}
-	return out, 0, true
-}
-
-// NormalizeArgs 在解析前统一处理参数：先展开短选项，再把 `--` 之前的
-// 裸 -N 改写成 --recent=N，最后把位置参数之后的选项重排到前面。
-func NormalizeArgs(args []string) []string {
-	return ReorderArgs(RewriteIndexArgs(ExpandShortFlags(args)))
-}
-
-// RewriteIndexArgs 把裸写的 -N 改写成 --recent=N，其余参数原样保留。
-func RewriteIndexArgs(args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		// "--" 后的参数不改写
 		if arg == "--" {
 			out = append(out, args[i:]...)
 			break
@@ -171,7 +76,7 @@ func RewriteIndexArgs(args []string) []string {
 		out = append(out, arg)
 
 		// `-flag value` 形式：值原样跟在后面，不能当位置参数改写。
-		if valueFlags[args[i]] && i+1 < len(args) {
+		if optionConsumesNext(fs, args[i]) && i+1 < len(args) {
 			i++
 			out = append(out, args[i])
 		}
@@ -179,75 +84,24 @@ func RewriteIndexArgs(args []string) []string {
 	return out
 }
 
-// ReorderArgs 把位置参数之后的选项移到位置参数之前，使
-// `work my-app -n` 与 `work -n my-app` 等价；`--` 之后全部视为位置参数。
-// 目标选项也参与重排，这样 `项目名 + --recent` 会在解析阶段报冲突，而不是静默忽略。
-// 未知的选项形态也移到前面，交给 flag 包报错，而不是在位置参数之后被吞掉。
-func ReorderArgs(args []string) []string {
-	pos := firstPositional(args)
-	if pos < 0 {
-		return args
-	}
-	out := make([]string, 0, len(args))
-	out = append(out, args[:pos]...)
-	rest := make([]string, 0, len(args)-pos)
-	rest = append(rest, args[pos])
-	for i := pos + 1; i < len(args); i++ {
+// projectAfterTerminator 判断第一个位置参数是否紧跟在 `--` 之后。
+// 带值选项会先吃掉下一个参数，所以 `--workspace -- -1` 里的 `--` 是值而不是终止符。
+func projectAfterTerminator(fs *pflag.FlagSet, args []string) bool {
+	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			rest = append(rest, args[i:]...)
-			break
+			return i+1 < len(args)
 		}
-		if !isFlagToken(arg) {
-			rest = append(rest, arg)
-			continue
-		}
-		_, takesValue, known := reorderOption(arg)
-		out = append(out, arg)
-		if known && takesValue && !strings.Contains(arg, "=") && i+1 < len(args) {
+		if optionConsumesNext(fs, arg) {
 			i++
-			out = append(out, args[i])
-		}
-	}
-	return append(out, rest...)
-}
-
-// reorderOption 识别展开后的长选项，返回规范名、是否带独立值、是否已知。
-func reorderOption(arg string) (name string, takesValue, known bool) {
-	if !isFlagToken(arg) || arg == "--" {
-		return "", false, false
-	}
-	name = strings.TrimPrefix(arg, "-")
-	name = strings.TrimPrefix(name, "-")
-	if i := strings.IndexByte(name, '='); i >= 0 {
-		name = name[:i]
-	}
-	if !longFlags[name] {
-		return "", false, false
-	}
-	return name, valueFlags["--"+name], true
-}
-
-// firstPositional 返回第一个位置参数的下标；`--` 之前没有位置参数时返回 -1。
-// 已知带值选项会跳过它的值，避免把 `--indent -5` 的 -5 当成位置参数。
-func firstPositional(args []string) int {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			return -1
-		}
-		_, takesValue, known := reorderOption(args[i])
-		if known {
-			if takesValue && !strings.Contains(args[i], "=") && i+1 < len(args) {
-				i++
-			}
 			continue
 		}
-		if isFlagToken(args[i]) {
+		if isFlagToken(arg) {
 			continue
 		}
-		return i
+		return false
 	}
-	return -1
+	return false
 }
 
 // isFlagToken 判断 token 是否像选项；单独的 "-" 与 "--" 不算。
@@ -257,12 +111,12 @@ func isFlagToken(arg string) bool {
 
 // collisionWarnings 汇总 CLI 语义造成的同名歧义：init 子命令与选项名。
 // -N 索引的歧义由 project.Resolve 负责，因为那一层本来就要解释索引。
-func collisionWarnings(projectArg string, args []string, used map[string]bool, projects []project.Project) []project.Warning {
+func collisionWarnings(fs *pflag.FlagSet, projectArg string, args []string, used map[string]bool, projects []project.Project) []project.Warning {
 	var warnings []project.Warning
 	if w, ok := initCollisionWarning(projectArg, projects); ok {
 		warnings = append(warnings, w)
 	}
-	warnings = append(warnings, optionCollisionWarnings(args, used, projects)...)
+	warnings = append(warnings, optionCollisionWarnings(fs, args, used, projects)...)
 	return warnings
 }
 
@@ -284,7 +138,7 @@ func initCollisionWarning(projectArg string, projects []project.Project) (projec
 
 // optionCollisionWarnings 找出被实际解析为选项、且与工作区目录同名的写法。
 // 只统计 flag 真正用到的选项；`--` 之后的 token 与带值选项的值都不参与提示。
-func optionCollisionWarnings(args []string, used map[string]bool, projects []project.Project) []project.Warning {
+func optionCollisionWarnings(fs *pflag.FlagSet, args []string, used map[string]bool, projects []project.Project) []project.Warning {
 	seen := make(map[string]bool)
 	var warnings []project.Warning
 	for i := 0; i < len(args); i++ {
@@ -292,7 +146,7 @@ func optionCollisionWarnings(args []string, used map[string]bool, projects []pro
 		if arg == "--" {
 			break
 		}
-		spelling, names, ok := optionToken(arg)
+		spelling, names, ok := optionToken(fs, arg)
 		if ok && !seen[spelling] && optionUsed(names, used) {
 			seen[spelling] = true
 			for _, p := range projects {
@@ -305,7 +159,7 @@ func optionCollisionWarnings(args []string, used map[string]bool, projects []pro
 				})
 			}
 		}
-		if optionConsumesNext(arg) && i+1 < len(args) {
+		if optionConsumesNext(fs, arg) && i+1 < len(args) {
 			i++
 		}
 	}
@@ -313,34 +167,42 @@ func optionCollisionWarnings(args []string, used map[string]bool, projects []pro
 }
 
 // optionConsumesNext 判断这个选项是否会吃掉下一个参数作为值。
-// 支持长选项、单横线长选项、短选项单独值，以及组合中最后一个带值短选项。
-func optionConsumesNext(arg string) bool {
-	if !isFlagToken(arg) || arg == "--" {
+// 取值规则来自 pflag 的 NoOptDefVal：布尔项可省略值，带值项在没有贴值时会占用下一个参数。
+func optionConsumesNext(fs *pflag.FlagSet, arg string) bool {
+	if !isFlagToken(arg) {
 		return false
 	}
-	if _, takesValue, known := reorderOption(arg); known {
-		return takesValue && !strings.Contains(arg, "=")
-	}
-	body, ok := shortBody(arg)
-	if !ok {
-		return false
-	}
-	for j := 0; j < len(body); j++ {
-		c := body[j]
-		if _, found := shortFlags[c]; !found {
+	if strings.HasPrefix(arg, "--") {
+		body := arg[2:]
+		if strings.IndexByte(body, '=') >= 0 {
 			return false
 		}
-		if shortBoolFlags[c] {
+		f := fs.Lookup(body)
+		return f != nil && f.NoOptDefVal == ""
+	}
+
+	body := arg[1:]
+	for i := 0; i < len(body); i++ {
+		f := fs.ShorthandLookup(string(body[i]))
+		if f == nil {
+			return false
+		}
+		if f.NoOptDefVal != "" {
+			// `-n=false` 是给布尔项赋值，不再吃下一个参数。
+			if i+1 < len(body) && body[i+1] == '=' {
+				return false
+			}
 			continue
 		}
-		return body[j+1:] == ""
+		return body[i+1:] == ""
 	}
 	return false
 }
 
 // optionToken 把一段选项写法拆成“用户实际写下的拼写”与规范选项名。
 // 短选项组合只取到第一个带值选项为止：-ni5 → 拼写 -ni、规范名 no-color/indent。
-func optionToken(arg string) (spelling string, names []string, ok bool) {
+// 单横线只表示短选项；`-no-color` 这类写法按 pflag 的规则视为短选项组合。
+func optionToken(fs *pflag.FlagSet, arg string) (spelling string, names []string, ok bool) {
 	if arg == "" || arg == "-" || arg == "--" {
 		return "", nil, false
 	}
@@ -351,32 +213,29 @@ func optionToken(arg string) (spelling string, names []string, ok bool) {
 		if i := strings.IndexByte(body, '='); i >= 0 {
 			name = body[:i]
 		}
-		if !longFlags[name] {
+		f := fs.Lookup(name)
+		if f == nil {
 			return "", nil, false
 		}
-		return arg[:2+len(name)], []string{name}, true
+		return arg[:2+len(name)], []string{f.Name}, true
 	}
 	if !strings.HasPrefix(arg, "-") {
 		return "", nil, false
 	}
 
 	body := arg[1:]
-	name := body
-	if i := strings.IndexByte(body, '='); i >= 0 {
-		name = body[:i]
-	}
-	if longFlags[name] {
-		return "-" + name, []string{name}, true
-	}
-
 	end := len(body)
 	for i := 0; i < len(body); i++ {
-		n, found := shortFlags[body[i]]
-		if !found {
+		f := fs.ShorthandLookup(string(body[i]))
+		if f == nil {
 			return "", nil, false
 		}
-		names = append(names, n)
-		if !shortBoolFlags[body[i]] {
+		names = append(names, f.Name)
+		if f.NoOptDefVal == "" {
+			end = i + 1
+			break
+		}
+		if i+1 < len(body) && body[i+1] == '=' {
 			end = i + 1
 			break
 		}
@@ -402,27 +261,18 @@ func optionUsed(names []string, used map[string]bool) bool {
 
 // parseWith 把命令行解析结果与配置默认值合并。数值与开关先取配置文件的值，
 // 命令行显式给定时再覆盖。
-func parseWith(fs *flag.FlagSet, args []string, cfg config.Config) (Options, error) {
+func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, error) {
 	o := Options{Config: cfg, Args: args}
+	registerFlags(fs, &o, cfg)
 
-	fs.StringVar(&o.Project, "project", "", "要跳转的项目：完整名称、唯一前缀、-N（按最近修改排序的第 N 个），或仓库地址（自动克隆后进入）")
-	fs.IntVar(&o.Recent, "recent", 0, "按最近修改排序的第 N 个项目（1 起，等价于 -N）")
-	fs.IntVar(&o.Config.Indent, "indent", cfg.Indent, "左侧缩进空格数")
-	fs.StringVar(&o.CwdFile, "cwd-file", "", "成功后把目标目录写入该文件，供 shell 函数读取")
-	fs.StringVar(&o.Workspace, "workspace", "", "工作区根目录；留空则依次读环境变量 GOWORK_WORKSPACE 与配置文件")
-	fs.BoolVar(&o.Config.NoColor, "no-color", cfg.NoColor, "禁用 ANSI 颜色")
-	fs.BoolVar(&o.Help, "help", false, "显示帮助并退出")
-	fs.Usage = func() {
-		writeHelp(fs.Output())
-	}
-
-	// 统一在解析前做参数归一化，同时保留原始 Args 供冲突提示使用。
-	normalized := NormalizeArgs(args)
+	// 裸 -N 必须先改写：pflag 会把 -1 当成未知 shorthand。
+	normalized := RewriteIndexArgs(fs, args)
 	if err := fs.Parse(normalized); err != nil {
 		return o, err
 	}
+	o.flags = fs
 	o.UsedFlags = make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) { o.UsedFlags[f.Name] = true })
+	fs.Visit(func(f *pflag.Flag) { o.UsedFlags[f.Name] = true })
 
 	// 帮助优先：同时给了冲突参数或越界值时也直接显示帮助，而不是报错。
 	if o.Help {
@@ -444,7 +294,7 @@ func parseWith(fs *flag.FlagSet, args []string, cfg config.Config) (Options, err
 			o.Project = fmt.Sprintf("-%d", o.Recent)
 		} else {
 			o.Project = positional
-			o.ProjectAfterTerminator = o.Project != "" && projectAfterTerminator(normalized, fs.Args())
+			o.ProjectAfterTerminator = o.Project != "" && projectAfterTerminator(fs, normalized)
 		}
 	}
 	if o.Config.Indent < config.MinIndent {
@@ -453,23 +303,9 @@ func parseWith(fs *flag.FlagSet, args []string, cfg config.Config) (Options, err
 	return o, nil
 }
 
-// projectAfterTerminator 判断第一个位置参数是否紧跟在 `--` 之后。
-// flag.Args() 是 normalized 的后缀，k 指向第一个位置参数；k-1 为 `--` 才算终止符。
-// `--` 也可能是上一个带值选项的值（如 `--workspace -- -1`），这时不算。
-func projectAfterTerminator(normalized, remaining []string) bool {
-	k := len(normalized) - len(remaining)
-	if k <= 0 || k >= len(normalized) || normalized[k-1] != "--" {
-		return false
-	}
-	if k >= 2 && valueFlags[normalized[k-2]] {
-		return false
-	}
-	return true
-}
-
 // Parse 解析命令行参数；ContinueOnError 便于测试，正式入口用 ExitOnError。
 func Parse(args []string, cfg config.Config) (Options, error) {
-	fs := flag.NewFlagSet("gowork", flag.ContinueOnError)
+	fs := pflag.NewFlagSet("gowork", pflag.ContinueOnError)
 	return parseWith(fs, args, cfg)
 }
 
@@ -510,10 +346,11 @@ func Main(args []string) {
 		cfg = config.DefaultConfig()
 	}
 
-	// parseWith 内部会先展开短选项、再改写裸 -N（-1 = 最近修改的第一个）。
-	// Go 的 flag 包会把裸写的 -1 当成未知选项而报参数错误；统一改写后，
-	// PowerShell 与 POSIX 的 shell 函数、直接调 exe 三种入口的行为就一致了。
-	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
+	// parseWith 内部会先改写裸 -N（-1 = 最近修改的第一个）。
+	// pflag 会把裸写的 -1 当成未知 shorthand；统一改写后，PowerShell 与 POSIX
+	// 的 shell 函数、直接调 exe 三种入口的行为就一致了。
+	// 用 ContinueOnError 自己处理错误：pflag 的 ExitOnError 会把错误打到 stdout。
+	fs := pflag.NewFlagSet(args[0], pflag.ContinueOnError)
 	o, err := parseWith(fs, args[1:], cfg)
 	if err != nil {
 		sysinfo.Fail(err, 2, o.Config.NoColor)
@@ -578,7 +415,7 @@ func Run(o Options, cfg config.Config) error {
 		}
 	}
 
-	warnings = append(warnings, collisionWarnings(o.Project, o.Args, o.UsedFlags, projects)...)
+	warnings = append(warnings, collisionWarnings(o.flags, o.Project, o.Args, o.UsedFlags, projects)...)
 	r.Render(target, projects, warnings)
 
 	if o.CwdFile != "" {

@@ -23,7 +23,7 @@
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
 3. `cli.Main`：`sysinfo.EnableVT()` → `runSubcommand` 按 `os.Args[1]` 处理
    `init` / `complete` 并直接返回 → `config.Load()` →
-   `NormalizeArgs`（先展开短选项，再改写裸 `-N`）→ `parseWith`。
+   `RewriteIndexArgs`（解析前改写裸 `-N`）→ `parseWith`。
 4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New` → `project.List` →
    若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
 5. `render.Renderer.Render`：清屏、窗口标题、logo、仪表盘、格言，最后是提示。
@@ -97,31 +97,30 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 命令行参数
 
-- 入口先 `NormalizeArgs`：`ExpandShortFlags` 展开类 Unix 短选项，`RewriteIndexArgs`
-  把裸 `-N` 改写成 `--recent=N`，最后由 `ReorderArgs` 把项目名之后的选项移到前面。
-  顺序不能反，否则 `-p -1` 的值会被当成索引。
+- 入口先 `RewriteIndexArgs`：pflag 会把裸 `-1` 当成未知 shorthand，所以解析前必须
+  改写成 `--recent=N`。判断 token 是否会吃掉下一个参数时直接查 pflag 的注册信息
+  （`Lookup` / `ShorthandLookup` / `NoOptDefVal`），`-p -1` 的值不会被改坏。
 - `--recent N` 与 `-N` 等价；裸 `-N` 仍交给 `project.Resolve` 按索引处理，因此同名/同前缀提示不受影响。
   `--recent` 与 `--project` 都是目标选择器，同时出现、或再给项目名时报错；
-  `-N` 也算目标，项目名之后再写会被重排成 `--recent` 并报冲突。
-- `ReorderArgs` 把第一个位置参数之后的选项（含独立值）移到前面，`--` 之后不重排。
-  因此 `work my-app -n` 与 `work -n my-app` 等价；项目名与目标选项同时出现则由
-  `parseWith` 报错，未知选项也会移到前面交给 flag 报错。新增选项时要同步
-  `longFlags` / `valueFlags`，重排与同名提示会自动覆盖。
+  `-N` 也算目标，项目名之后再写会被改写成 `--recent` 并报冲突。
+- pflag 默认 interspersed：`work my-app -n` 与 `work -n my-app` 等价，不需要额外的
+  重排；未知选项会在原位置报错，而不是被吞掉。
 - 短选项：`-p` / `-i` / `-w` / `-c` / `-n` / `-h`，分别对应项目、缩进、工作区、
   cwd 文件、禁用颜色与帮助。布尔项可组合（`-ni 5`、`-ni5`），带值项吃掉组合剩余
-  字符或下一个参数；整段出现未知字符时原样保留，交给 `flag` 报错。`--` 作为终止符后不展开；
-  如果它是上一个带值选项的值，则继续处理后续参数。
+  字符或下一个参数。单横线只表示短选项：`-no-color`、`-project` 这类单横线长选项
+  不再支持；长选项必须写双横线。
 - 帮助由 `internal/cli/help.go` 手写：GNU 两列排版（左列 ASCII + `<PROJECT>` 占位符），
-  不走 `flag.PrintDefaults`；`-h` / `--help` 置位 `Options.Help`，`Main` 把帮助写 stdout
-  并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通 bool 选项，避免 `flag`
-  的 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
+  不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
+  `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
+  bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
 - `--` 之后的参数都是位置参数；第一个位置参数会被标记为 `ProjectAfterTerminator`，
   `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
   所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
   该写法只在直接调用二进制或 POSIX shell 中可用；pwsh 用 `./-1`。
 - `cli.collisionWarnings` 汇总 CLI 语义造成的同名歧义：`init` 子命令、选项名
   （如 `-n`、`-p`、`--no-color`）与工作区目录同名。只对 `fs.Visit` 实际解析到的选项
-  提示；选项重排后，位置参数之后的选项也会算，`--` 之后的位置参数不算。
+  提示；位置参数之后的选项也会算，`--` 之后的位置参数不算。`optionToken` /
+  `optionConsumesNext` 直接读 pflag 的 `Lookup` / `ShorthandLookup` 与 `NoOptDefVal`。
   `cwd-file`（shell 自动注入）与 `help` 不提示。
   提示按用户实际拼写的选项名比较目录名，消歧写法是 `work ./<选项名>`。
   `complete` 是只给补全用的内部旁路，不参与同名提示。
@@ -285,7 +284,7 @@ go test ./...
 ```
 
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
-- `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住参数重排：
+- `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住位置参数后的选项：
   项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
   项目名与 `--project` / `--recent` / `-N` 的冲突。
 - `internal/shell/shell_test.go`：
@@ -338,8 +337,9 @@ go test ./...
    整段长度；缓存也必须保留 previous。
 6. **缓存要存整理后的数据**，不要原样存接口响应；数据结构变化时递增
    `cacheVersion`（当前 4）；版本不匹配的缓存直接丢弃。
-7. **裸写 `-N` 会被 `flag` 包当成未知选项**。`cli.RewriteIndexArgs` 在解析前改写成
-   `--recent=N`；新增带值的选项必须同步加进 `cli.valueFlags`，否则 `--flag -1` 会被误改。
+7. **裸写 `-N` 会被 pflag 当成未知 shorthand**。`cli.RewriteIndexArgs` 在解析前改写成
+   `--recent=N`；它用 `Lookup` / `ShorthandLookup` / `NoOptDefVal` 判断 token 会不会吃掉
+   下一个参数，所以新增选项只要在 `registerFlags` 里用正确的类型注册，不需要再维护取值清单。
    解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
    不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
    （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
@@ -376,9 +376,9 @@ go test ./...
 - 加平台相关函数：放 `internal/sysinfo` 的 `*_windows.go` / `*_posix.go`，用构建标签隔开；
   其余逻辑必须能在任意平台 `go test`。
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。
-- 加命令行选项：在 `internal/cli` 的 `Parse` 里注册；若是带值选项，同步 `valueFlags`；
-  加短选项时同步 `shortFlags` / `shortBoolFlags`；同时加进 `longFlags`（重排与同名提示依赖它）；
-  在 `internal/cli/help.go` 的表格里补说明（帮助是手写的，不走 `flag.PrintDefaults`）。
+- 加命令行选项：在 `internal/cli/registerFlags` 里用 pflag 的 `XxxVarP` 注册（带值选项
+  不要设 `NoOptDefVal`）；短选项直接写在 shorthand 参数里；在 `internal/cli/help.go`
+  的表格里补说明。裸 `-N` 改写与同名提示会自动从注册信息读取取值规则。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；

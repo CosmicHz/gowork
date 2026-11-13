@@ -355,7 +355,8 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风格选项；macOS / Linux 不支持 PowerShell 风格选项。
 
 带参数的长选项同时接受 `--opt value` 和 `--opt=value`；布尔选项写 `--opt` 或
-`--opt=<true|false>`，不要写 `--no-color false` 这样的选项。也接受单横线长选项（如 `-project`）。
+`--opt=<true|false>`，不要写 `--no-color false` 这样的选项。长选项必须用双横线；
+单横线只表示短选项（`-n`、`-p foo`、`-pfoo`、`-ni5`）。
 
 短选项可以组合：`-ni 5` 等价于 `--no-color --indent 5`，`-ni5` 等价于
 `--no-color --indent=5`。带值选项后面的剩余字符会整体作为它的值（如 `-p-1` 等价于 `--project=-1`）。
@@ -511,7 +512,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 ```
 
 `-<N>` 索引三种入口都认：裸写的 `-<N>` 会先被改写成 `--recent=N`，所以直接跑 `-1` 也行
-（否则 Go 的 flag 包会把它当未知选项）；也可以显式写 `--recent 1`。
+（否则 pflag 会把它当未知 shorthand）；也可以显式写 `--recent 1`。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件。（shell 函数就是靠它回传的）
 
