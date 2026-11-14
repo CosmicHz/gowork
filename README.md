@@ -328,17 +328,17 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 ### 选项一览
 
-目标选择器只能三选一：**位置项目名**、**`--project`**、**`--recent` / `-<N>`**。
+目标选择器只能三选一：**直接写项目名**、**`--project`**、**`--recent` / `-1`…`-9`**。
 
 #### 目标选择器
 
 | 写法 | Windows PowerShell | 说明 | 范例 |
 | --- | --- | --- | --- |
 | `work <项目名>` | 不变 | 完整项目名、唯一前缀或仓库地址 | `work my-project` |
-| `work -p <目标>` / `work --project <目标>` | `-Project <目标>`（`-Proj` / `-P`） | 与位置项目名互斥 | `work --project my-pro` / `work --project -1` |
-| `work -<N>` / `work --recent <N>` | 不变 | 最近修改的第 N 个（1 起）；与位置项目名、`--project` 互斥 | `work -1` / `work --recent 1` |
+| `work -p <目标>` / `work --project <目标>` | `-Project <目标>`（`-Proj` / `-P`） | 与直接写项目名互斥 | `work --project my-pro` / `work --project -1` |
+| `work -1` … `work -9` / `work --recent <N>` | 不变 | 最近修改的第 N 个（1 起）；与直接写项目名、`--project` 互斥 | `work -1` / `work --recent 10` |
 
-`--project -<N>` （或 `--project=-<N>`）等价于 `--recent <N>` 和 `-<N>`
+`--project -<N>` （或 `--project=-<N>`）等价于 `--recent <N>`；N 在 1–9 时也等价于 `-N`。
 
 目标选择器之间是互斥的，同时传入多个选择器（即便彼此等价）会报错。
 
@@ -361,10 +361,8 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 短选项可以组合：`-ni 5` 等价于 `--no-color --indent 5`，`-ni5` 等价于
 `--no-color --indent=5`。带值选项后面的剩余字符会整体作为它的值（如 `-p-1` 等价于 `--project=-1`）。
 
-选项可以写在项目名之前或之后：`work my-app -n` 与 `work -n my-app` 等价。
-
-`--` 之后的参数不再按选项解析，而是当作项目名：`work -- --no-color` 会去找名为
-`--no-color` 的项目，不会关闭颜色；项目名只能写一个，多写会报错。
+`--` 之后的参数不再按选项解析，而是当作传入的项目名：`work -- --no-color`
+会去找名为 `--no-color` 的项目，不会关闭颜色；位置参数只能有一个，多写会报错。
 
 > [!important]
 > 在 PowerShell 中， `--` 无效。
@@ -397,12 +395,13 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 工作区里以 `.` 开头的目录会被跳过；指向目录的符号链接算项目。
 
-### `-<N>` 索引
+### 索引写法
 
-`-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。越界时报错并提示有效范围。
-等价的显式写法是 `--recent N`（或 `--recent=N`），例如 `work --recent 1`。
+`-1` 是**最近修改**的项目，`-2` 次之，按子目录的 LastWriteTime 倒序。短选项只提供 `-1`…`-9`，
+第 10 个及以后的请写 `--recent N`（或 `--recent=N`），例如 `work --recent 12`。
+越界时报错并提示有效范围。
 
-### `-<N>` 与目录同名
+### 索引写法与目录同名
 
 工作区里若有目录叫 `-1`，或有目录以 `-1` 开头（如 `-1-app`），`work -1` 仍按索引解析，不会按名字匹配或进入这些目录。
 要进入同名目录请写 `work ./-1`（macOS / Linux 也可用 `work -- -1`）；
@@ -412,9 +411,9 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 ### `init` 与目录同名
 
-`gowork init <shell>` 是输出 shell 集成代码的子命令，但 shell 函数总把 `--cwd-file` 放在
-最前面，所以 `work init` 里的 `init` 是项目名。工作区里若真有名为 `init` 的目录，
-`work init` 会进入它，并在仪表盘下方提示两者的区别；想完全避免歧义可以写 `work ./init`。
+`gowork init <shell>` 是输出 shell 集成代码的子命令，但 shell 函数总在用户参数之前插入
+一个内部参数（当前是 `--cwd-file`），所以 `work init` 里的 `init` 是项目名。工作区里若真有名为 `init` 的目录，
+`work init` 会直接进入它；想完全避免歧义可以写 `work ./init`。
 
 ### 选项名与目录同名
 
@@ -511,8 +510,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 ./bin/gowork --workspace ~/Projects --project my-app --no-color
 ```
 
-`-<N>` 索引三种入口都认：裸写的 `-<N>` 会先被改写成 `--recent=N`，所以直接跑 `-1` 也行
-（否则 pflag 会把它当未知 shorthand）；也可以显式写 `--recent 1`。
+`-1`…`-9` 是真正的短选项，三种入口都认；第 10 个及以后写 `--recent N`，例如 `work --recent 12`。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件。（shell 函数就是靠它回传的）
 
@@ -559,7 +557,7 @@ GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 ./cmd/gowork
 ```
 
 平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；其余包与平台无关，
-所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、`-<N>` 索引、宽度截断、
+所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、索引写法、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
 
 CI 在 Windows、macOS、Linux 三个平台各跑一遍 `gofmt`、`go vet` 与 `go test`（用 gotestsum
@@ -584,7 +582,7 @@ gowork 会把目标目录写进 `--cwd-file` 指定的临时文件，由 shell �
 - `sh` 与 `fish`：gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，因此清屏、窗口标题和颜色才会生效。
 - `zsh`：在 sh 函数体之后追加补全脚本。`_gowork` 通过 `gowork complete projects`
   动态取项目名（最近修改的在前），并描述全部选项；`-p` 补项目、`-w` 补目录、
-  `-i` / `--recent` 补数字、裸 `-N` 补 `-1`…`-N`。补全依赖 zsh 的 `compinit`，
+  `-i` / `--recent` 补数字、输入 `-` 补 `-1`…`-9`。补全依赖 zsh 的 `compinit`，
   没加载时静默跳过。oh-my-zsh / prezto 等框架通常已经加载它；手动配置的 zsh 需要在
   `eval "$(gowork init zsh)"` 之前有一句 `autoload -Uz compinit && compinit`。
 

@@ -23,7 +23,7 @@
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
 3. `cli.Main`：`sysinfo.EnableVT()` → `runSubcommand` 按 `os.Args[1]` 处理
    `init` / `complete` 并直接返回 → `config.Load()` →
-   `RewriteIndexArgs`（解析前改写裸 `-N`）→ `parseWith`。
+   `parseWith`（内部先 `checkIndexArgs`，再 `pflag.Parse`）。
 4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New` → `project.List` →
    若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
 5. `render.Renderer.Render`：清屏、窗口标题、logo、仪表盘、格言，最后是提示。
@@ -33,7 +33,7 @@
 
 注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` / `work complete`
 是**项目名**（`flag.Arg(0)`），不会触发子命令；只有直接运行 `gowork init <shell>`
-或 `gowork complete projects`（子命令位于 `argv[1]`）才走旁路。
+或 `gowork complete projects`（子命令位于 `shellArgIndex`）才走旁路。
 
 ## 目录结构
 
@@ -41,7 +41,7 @@
 cmd/gowork/            入口，只把 os.Args 交给 internal/cli
 internal/
   ansi/                ANSI 前景色常量与主色调色板
-  cli/                 参数解析、裸 -N 改写（RewriteIndexArgs → --recent）、编排（Main / Run）、complete 子命令
+  cli/                 参数解析、索引短选项校验（checkIndexArgs）、编排（Main / Run）、complete 子命令
   config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
   project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
   render/              仪表盘渲染、ANSI 使用、row / rule / printRecent、宽度计算与截断
@@ -97,29 +97,36 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 命令行参数
 
-- 入口先 `RewriteIndexArgs`：pflag 会把裸 `-1` 当成未知 shorthand，所以解析前必须
-  改写成 `--recent=N`。判断 token 是否会吃掉下一个参数时直接查 pflag 的注册信息
-  （`Lookup` / `ShorthandLookup` / `NoOptDefVal`），`-p -1` 的值不会被改坏。
-- `--recent N` 与 `-N` 等价；裸 `-N` 仍交给 `project.Resolve` 按索引处理，因此同名/同前缀提示不受影响。
-  `--recent` 与 `--project` 都是目标选择器，同时出现、或再给项目名时报错；
-  `-N` 也算目标，项目名之后再写会被改写成 `--recent` 并报冲突。
+- `-1`…`-9` 是不带值的开关：`registerFlags` 用 `BoolVarP` 建九个隐藏选项，解析结果记在
+  `Options.index`（下标即序号）。pflag 对 bool 选项自动设 `NoOptDefVal="true"`，所以 `-1`
+  不会去抢下一个参数。`-1=5` 这类赋值写法由 `checkIndexArgs` 拒绝。
+- `-10` 及以上不再有短选项，改用 `--recent N`。`checkIndexArgs` 在解析前拦下
+  `-10`、`-12`、`--12`、`-0`：pflag 会把 `-12` 拆成两个开关，把 `-11` / `-22` 这类
+  重复数字静默当成第 1 / 2 个，`-10` 则会报难懂的 `unknown shorthand`。
+  提示按“可能是笔误”给出正确写法；选项的值（`-p -12`、`-ni -12`）不参与判断。
+- `--recent N` 与 `-N`（1–9）等价；`Project` 仍用 `-N` 字符串表示索引，交给
+  `project.Resolve` 处理，因此同名/同前缀提示不受影响。
+  `--project`、`--recent`、`-N` 都是目标选择器，同时出现、或再直接写项目名（位置参数）时报错；
+  提示按“多写了”与“这次同时用了 X 和 Y”两类措辞分别给出。
 - pflag 默认 interspersed：`work my-app -n` 与 `work -n my-app` 等价，不需要额外的
   重排；未知选项会在原位置报错，而不是被吞掉。
-- 短选项：`-p` / `-i` / `-w` / `-c` / `-n` / `-h`，分别对应项目、缩进、工作区、
-  cwd 文件、禁用颜色与帮助。布尔项可组合（`-ni 5`、`-ni5`），带值项吃掉组合剩余
-  字符或下一个参数。单横线只表示短选项：`-no-color`、`-project` 这类单横线长选项
+- 短选项：`-p` / `-i` / `-w` / `-c` / `-n` / `-h` 与 `-1`…`-9`。布尔项可组合
+  （`-ni 5`、`-n1`），带值项吃掉组合剩余字符或下一个参数。单横线只表示短选项：
+  `-no-color`、`-project` 这类单横线长选项
   不再支持；长选项必须写双横线。
 - 帮助由 `internal/cli/help.go` 手写：GNU 两列排版（左列 ASCII + `<PROJECT>` 占位符），
   不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
   `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
   bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
-- `--` 之后的参数都是位置参数（也就是项目名）；项目名只能有一个，多写直接报错并列出多写的部分。
-  第一个位置参数会被标记为 `ProjectAfterTerminator`，
+- `--` 之后的参数都是位置参数；gowork 只接受一个位置参数，它的角色是目标选择器
+  “直接写项目名”。多写直接报错并列出多写的部分。
+  第一个位置参数是否来自 `--` 用 `fs.ArgsLenAtDash() == 0` 判断（值为 0 说明终止符后面
+  紧跟着第一个位置参数；`--workspace --` 里的 `--` 是值，pflag 不会记 dash）。
   `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
   所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
   该写法只在直接调用二进制或 POSIX shell 中可用；pwsh 用 `./-1`。
-- `cli.collisionWarnings` 汇总 CLI 语义造成的同名歧义：`init` 子命令、选项名
-  （如 `-n`、`-p`、`--no-color`）与工作区目录同名。只对 `fs.Visit` 实际解析到的选项
+- `cli.optionCollisionWarnings` 汇总选项名与工作区目录同名的歧义
+  （如 `-n`、`-p`、`--no-color`）。只对 `fs.Visit` 实际解析到的选项
   提示；位置参数之后的选项也会算，`--` 之后的位置参数不算。`optionToken` /
   `optionConsumesNext` 直接读 pflag 的 `Lookup` / `ShorthandLookup` 与 `NoOptDefVal`。
   `cwd-file`（shell 自动注入）与 `help` 不提示。
@@ -199,7 +206,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - zsh：在 `shWorkFunc` 后追加 `_gowork` 补全与 `compdef _gowork work`。候选项目名来自
   `gowork complete projects`（每行一个，按 `project.List` 的最近修改倒序）。
   补全用 `_arguments` 描述选项；裸 `-N` 在调用 `_arguments` 前单独拦下，否则会被当成
-  未知选项。`compdef` 由 `compinit` 定义，模板用 `(( $+functions[compdef] ))` 守卫，
+  未知选项，候选只给 `-1`…`-9`（与真实短选项一致）。`compdef` 由 `compinit` 定义，模板用 `(( $+functions[compdef] ))` 守卫，
   没加载 compinit 时静默跳过；不自动替用户跑 compinit。
   组合短选项（`-ni5`）、紧凑取值（`-pfoo`）与 `--` 之后的字面参数不做补全。
 - PowerShell：`function global:work` **不用 `param` 块**——用了会把 `--indent 5` 的
@@ -286,9 +293,9 @@ go test ./...
 
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
 - `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住位置参数后的选项：
-  项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
-  项目名与 `--project` / `--recent` / `-N` 的冲突；`TestParseRejectsMultipleProjects`
-  钉住“只能指定一个项目”，且 `-h` 优先于该校验。
+  位置参数之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
+  位置参数（项目名）与 `--project` / `--recent` / `-N` 的冲突；
+  `TestParseRejectsMultipleProjects` 钉住“只能指定一个项目”，且 `-h` 优先于该校验。
 - `internal/shell/shell_test.go`：
   - 各 shell 名称、别名、大小写、错误参数；
   - `TestScriptSyntax` 把生成的代码交给 bash / zsh / dash / fish / pwsh / powershell
@@ -302,8 +309,9 @@ go test ./...
   - `TestCheckPowerShellDetectsError` 用坏脚本确认检查不是空转。
 - `internal/cli/complete_test.go`：`writeProjectNames` 的输出顺序（最近修改在前）、
   隐藏目录/文件跳过、工作区不存在时无输出；`completeSubcommand` 的用法错误与
-  环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令只在 `argv[1]` 生效，
-  shell 注入 `--cwd-file` 后 `complete` / `init` 按项目名处理。
+  环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令只在 `shellArgIndex` 生效，
+  且与注入参数的名字无关，
+  shell 注入内部参数后 `complete` / `init` 按项目名处理。
 - `install_test.sh`（仓库根目录）：不执行安装，只 source `install.sh` 里
   `# ---- 主流程 ----` 之前的函数；覆盖 hook 类型识别、配置命令检测、只改最后一个与去重
   （含 CRLF），以及无终端时 `setup_env` 默认只改最后一个。有可用终端时跳过 `setup_env` 用例，避免阻塞。
@@ -313,7 +321,8 @@ go test ./...
   - `TestListFollowsJunction`（仅 Windows）固定用 `mklink /J`，
     保证符号链接用例因权限跳过时，「链接指向目录算项目」仍然有覆盖。
 - `internal/sysinfo/sysinfo_test.go` 的 `TestColorEnabled` 钉住颜色开关的三个条件。
-- `internal/cli/cli_test.go` 覆盖裸 `-N` 改写，含各带值选项不应被改写的情况。
+- `internal/cli/cli_test.go` 覆盖索引短选项与 `checkIndexArgs`：`-1`…`-9` 可用、
+  `-1=5` 报错、`-1 -2` 冲突、`-10`/`-12` 提示改用 `--recent`、`-p -12` 不被误判。
 - 跳过项取决于环境：缺 zsh / dash / fish 会跳过对应的语法检查；Windows 上建不了
   符号链接时跳过该用例。CI 会确保解释器存在。
 
@@ -339,14 +348,15 @@ go test ./...
    整段长度；缓存也必须保留 previous。
 6. **缓存要存整理后的数据**，不要原样存接口响应；数据结构变化时递增
    `cacheVersion`（当前 4）；版本不匹配的缓存直接丢弃。
-7. **裸写 `-N` 会被 pflag 当成未知 shorthand**。`cli.RewriteIndexArgs` 在解析前改写成
-   `--recent=N`；它用 `Lookup` / `ShorthandLookup` / `NoOptDefVal` 判断 token 会不会吃掉
-   下一个参数，所以新增选项只要在 `registerFlags` 里用正确的类型注册，不需要再维护取值清单。
+7. **`-N` 不能靠 pflag 的 `-N` 解析**。`-1`…`-9` 必须注册成真正的短选项并设
+   `NoOptDefVal`；`-10` 及以上和 `-12` 这种两位数是陷阱（会被拆成两个短选项），
+   由 `cli.checkIndexArgs` 在解析前拦下，提示改用 `--recent N`。
    解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
    不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
    （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
-8. **子命令只在 `argv[1]` 时生效**（`init`、`complete`）。shell 函数总把 `--cwd-file`
-   放最前面，所以 `work init` / `work complete` 是项目名；不要据此认为「`work init`
+8. **子命令只在 `shellArgIndex` 位置生效**（`init`、`complete`）。shell 函数总在用户参数之前
+   插入一个内部参数（当前是 `--cwd-file`）占住这个位置，所以 `work init` /
+   `work complete` 是项目名；不要据此认为「`work init`
    会打印脚本」。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
    也因此 `$x = work` 捕获不到仪表盘（这是预期行为）。
@@ -362,9 +372,9 @@ go test ./...
     `go.mod` / `go.sum` 为 LF。
 16. **EXIT trap 的最后一条命令决定退出码**。`[ -n "$tmp_dir" ] && rm -rf ...` 在变量为空时
     返回 1，会把成功退出的脚本变成失败；trap 里用 `if`，不要用 `&&`。
-17. **zsh 补全里的裸 `-N` 必须先拦下**。`_arguments` 会把 `-1` 当未知选项，
+17. **zsh 补全里的 `-1`…`-9` 必须先拦下**。`_arguments` 会把 `-1` 当未知选项，
    所以模板在调用 `_arguments` 前用 `[[ $words[CURRENT] == -[0-9]* ]]` 单独给
-   `-1..-N`。另外 `compdef` 只有加载 `compinit` 后才存在：不要自动替用户跑 compinit，
+   `-1..-9`。另外 `compdef` 只有加载 `compinit` 后才存在：不要自动替用户跑 compinit，
    也不要在未加载时打印错误，否则会污染 shell 启动。补全候选来自
    `gowork complete projects`，失败时靠 `2>/dev/null` 静默。
 
@@ -380,12 +390,13 @@ go test ./...
 - 改节假日接口或字段：同步 `parseHoliday` / `collectEvents`、缓存结构并递增版本、相关测试、README。
 - 加命令行选项：在 `internal/cli/registerFlags` 里用 pflag 的 `XxxVarP` 注册（带值选项
   不要设 `NoOptDefVal`）；短选项直接写在 shorthand 参数里；在 `internal/cli/help.go`
-  的表格里补说明。裸 `-N` 改写与同名提示会自动从注册信息读取取值规则。
+  的表格里补说明。索引短选项与同名提示会自动从注册信息读取取值规则。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；
-  子命令统一在 `runSubcommand` 里按 `args[1]` 分派（`Main` 只调用它）。shell 函数总把
-  `--cwd-file` 注入到 `argv[1]`，所以 `work <名字>` 永远到不了子命令——这是刻意的：
+  子命令统一在 `runSubcommand` 里按 `args[shellArgIndex]` 分派（`Main` 只调用它）。shell 函数总把
+  `--cwd-file` 注入到 `shellArgIndex`（只占用位置，逻辑不依赖它的名字），所以 `work <名字>`
+  永远到不了子命令——这是刻意的：
   加子命令默认不需要改 shell 模板。只有当子命令必须能通过 `work` 调用时，才要改所有
   shell 模板（sh / zsh / fish / powershell），并补对应 shell 测试。
   新增只读旁路时优先复用 `config.Load` + `project.List`。
