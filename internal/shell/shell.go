@@ -72,7 +72,7 @@ const initSH = "# 由 gowork init sh 生成；bash / zsh / POSIX sh 通用。\n"
 // 选项与取值按 gowork 的参数表描述。只注册 work，不碰 gowork 可执行文件本身。
 //
 // compdef 由 compinit 定义；用户没加载 compinit 时静默跳过，避免在启动时打印错误。
-// 裸 -N 不是 _arguments 认得的选项，所以先自己拦下来，给出 -1..-N 的候选。
+// 裸 -1…-9 不是 _arguments 认得的选项，所以先自己拦下来，给出 -1..-9 的候选。
 const initZsh = "# 由 gowork init zsh 生成；包含 work 函数与补全。\n" + shWorkFunc + `
 # ---- zsh 补全 ----
 _gowork() {
@@ -84,10 +84,10 @@ _gowork() {
         [[ -n $name ]] && projects+=("$name")
     done
 
-    # 裸 -N 是索引写法，_arguments 会把它当未知选项；这里直接给 -1..-N。
+    # 裸 -N（-1…-9）是索引写法，_arguments 会把它当未知选项；这里直接给出候选。
     if [[ $words[CURRENT] == -[0-9]* ]]; then
         local i
-        for (( i = 1; i <= $#projects && i <= 10; i++ )); do
+        for (( i = 1; i <= $#projects && i <= 9; i++ )); do
             compadd -U -- "-$i"
         done
         return

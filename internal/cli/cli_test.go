@@ -41,7 +41,7 @@ func TestParseUsesConfigDefaults(t *testing.T) {
 		t.Errorf("应使用配置默认值：%+v", o.Config)
 	}
 	if o.Project != "my-app" {
-		t.Errorf("位置参数应作为项目：%q", o.Project)
+		t.Errorf("位置参数应成为项目名：%q", o.Project)
 	}
 }
 
@@ -209,8 +209,10 @@ func TestOptionToken(t *testing.T) {
 		{"-ni", "-ni", []string{"no-color", "indent"}, true},
 		{"-ni5", "-ni", []string{"no-color", "indent"}, true},
 		{"-c", "-c", []string{"cwd-file"}, true},
+		{"-1", "-1", []string{"index1"}, true},
+		{"-9", "-9", []string{"index9"}, true},
+		{"-n1", "-n1", []string{"no-color", "index1"}, true},
 		{"-no-color", "", nil, false},
-		{"-1", "", nil, false},
 		{"my-app", "", nil, false},
 		{"--", "", nil, false},
 		{"-", "", nil, false},
@@ -242,6 +244,8 @@ func TestOptionCollisionWarnings(t *testing.T) {
 		{Name: "-ni"},
 		{Name: "-c"},
 		{Name: "-i"},
+		{Name: "-1"},
+		{Name: "-n1"},
 		{Name: "my-app"},
 	}
 
@@ -267,6 +271,8 @@ func TestOptionCollisionWarnings(t *testing.T) {
 		{"作为选项值的 token 不提示", []string{"-p", "--no-color"}, map[string]bool{"project": true, "no-color": true}, []string{"-p"}},
 		{"组合选项的值不提示", []string{"-ni", "--no-color"}, map[string]bool{"no-color": true, "indent": true}, []string{"-ni"}},
 		{"单横线不再算长选项", []string{"-no-color"}, map[string]bool{"no-color": true}, nil},
+		{"索引交由 Resolve 提示", []string{"-1"}, map[string]bool{"index1": true, "no-color": true}, nil},
+		{"索引在组合里", []string{"-n1"}, map[string]bool{"no-color": true, "index1": true}, []string{"-n1"}},
 	}
 
 	for _, c := range cases {
@@ -288,42 +294,13 @@ func TestOptionCollisionWarnings(t *testing.T) {
 	}
 }
 
-func TestInitCollisionWarning(t *testing.T) {
-	w, ok := initCollisionWarning("init", []project.Project{{Name: "init"}})
-	if !ok {
-		t.Fatal("init 与目录同名时应提示")
-	}
-	if !strings.Contains(w.Message, "init") || !strings.Contains(strings.Join(w.Details, "\n"), "./init") {
-		t.Errorf("提示内容不对：%+v", w)
-	}
-
-	if _, ok := initCollisionWarning("Init", []project.Project{{Name: "init"}}); ok {
-		t.Error("子命令只认小写 init，Init 不应提示")
-	}
-	if _, ok := initCollisionWarning("init", []project.Project{{Name: "init-app"}}); ok {
-		t.Error("只有前缀命中时不该提示 init 同名")
-	}
-}
-
-func TestCollisionWarnings(t *testing.T) {
-	fs := testFlagSet(t, config.DefaultConfig())
-	projects := []project.Project{{Name: "init"}, {Name: "-n"}}
-	warnings := collisionWarnings(fs, "init", []string{"-n"}, map[string]bool{"no-color": true}, projects)
-	if len(warnings) != 2 {
-		t.Fatalf("应合并 init 与选项名提示，得到 %+v", warnings)
-	}
-	if !strings.Contains(warnings[0].Message, "init") || !strings.Contains(warnings[1].Message, "-n") {
-		t.Errorf("提示顺序或内容不对：%+v", warnings)
-	}
-}
-
 func TestOptionsAfterProjectAreParsed(t *testing.T) {
 	o, err := parseForTest(t, []string{"my-app", "-n"}, config.DefaultConfig())
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if !o.Config.NoColor {
-		t.Fatal("项目名之后的 -n 应生效")
+		t.Fatal("位置参数之后的 -n 应生效")
 	}
 	if o.Project != "my-app" {
 		t.Errorf("项目名不应被选项解析改变：%q", o.Project)
@@ -332,7 +309,7 @@ func TestOptionsAfterProjectAreParsed(t *testing.T) {
 
 func TestParseRejectsUnknownOptionAfterProject(t *testing.T) {
 	if _, err := parseForTest(t, []string{"my-app", "--unknown"}, config.DefaultConfig()); err == nil {
-		t.Fatal("项目名之后的未知选项应报错，而不是静默忽略")
+		t.Fatal("位置参数之后的未知选项应报错，而不是静默忽略")
 	}
 }
 
@@ -342,8 +319,8 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"两个项目名", []string{"my-app", "other"}, "other"},
-		{"三个项目名", []string{"my-app", "other", "third"}, "other、third"},
+		{"两个位置参数", []string{"my-app", "other"}, "other"},
+		{"三个位置参数", []string{"my-app", "other", "third"}, "other、third"},
 		{"终止符之后", []string{"--", "-1", "-2"}, "-2"},
 		{"终止符之前之后", []string{"my-app", "--", "other"}, "other"},
 	}
@@ -352,7 +329,7 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := parseForTest(t, c.args, config.DefaultConfig())
 			if err == nil {
-				t.Fatal("多个项目名应报错")
+				t.Fatal("多个位置参数应报错")
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("错误信息应列出多写的项目 %q：%v", c.want, err)
@@ -360,16 +337,16 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		})
 	}
 
-	// 单个项目名不受影响。
+	// 单个位置参数不受影响。
 	o, err := parseForTest(t, []string{"my-app"}, config.DefaultConfig())
 	if err != nil {
-		t.Fatalf("单个项目名不该报错：%v", err)
+		t.Fatalf("单个位置参数不该报错：%v", err)
 	}
 	if o.Project != "my-app" {
 		t.Errorf("项目名 = %q，想要 my-app", o.Project)
 	}
 
-	// 帮助优先于项目名校验。
+	// 帮助优先于位置参数校验。
 	o, err = parseForTest(t, []string{"-h", "my-app", "other"}, config.DefaultConfig())
 	if err != nil {
 		t.Fatalf("带 -h 时不该报错：%v", err)
@@ -385,17 +362,17 @@ func TestParseRejectsProjectWithTargetFlag(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"项目名之后 --recent", []string{"my-app", "--recent", "2"}, "项目名 my-app 和 --recent"},
-		{"项目名之后 --project", []string{"my-app", "--project", "other"}, "项目名 my-app 和 --project"},
-		{"项目名之后 -1", []string{"my-app", "-1"}, "项目名 my-app 和 索引 -1"},
-		{"项目名之前 --recent", []string{"--recent", "2", "my-app"}, "项目名 my-app 和 --recent"},
-		{"项目名之前 --project", []string{"--project", "other", "my-app"}, "项目名 my-app 和 --project"},
+		{"位置参数之后 --recent", []string{"my-app", "--recent", "2"}, "项目名 my-app 和 --recent"},
+		{"位置参数之后 --project", []string{"my-app", "--project", "other"}, "项目名 my-app 和 --project"},
+		{"位置参数之后 -1", []string{"my-app", "-1"}, "项目名 my-app 和 索引 -1"},
+		{"位置参数之前 --recent", []string{"--recent", "2", "my-app"}, "项目名 my-app 和 --recent"},
+		{"位置参数之前 --project", []string{"--project", "other", "my-app"}, "项目名 my-app 和 --project"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := parseForTest(t, c.args, config.DefaultConfig())
 			if err == nil {
-				t.Fatal("项目名与目标选项同时出现应报错")
+				t.Fatal("位置参数与其它目标选择器同时出现应报错")
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("错误信息应说明用哪两种方式指定了项目（%q）：%v", c.want, err)
@@ -440,42 +417,97 @@ func TestParseRecordsRawArgsAndUsedFlags(t *testing.T) {
 	}
 }
 
-func TestRewriteIndexArgs(t *testing.T) {
-	fs := testFlagSet(t, config.DefaultConfig())
+func TestParseIndexShorthand(t *testing.T) {
 	cases := []struct {
-		desc string
-		in   []string
-		want []string
+		desc    string
+		args    []string
+		project string
+		index   int
 	}{
-		{"裸索引", []string{"-1"}, []string{"--recent=1"}},
-		{"多位索引", []string{"-22"}, []string{"--recent=22"}},
-		{"布尔选项后的裸索引", []string{"--no-color", "-1"}, []string{"--no-color", "--recent=1"}},
-		{"索引在选项之前", []string{"-1", "--no-color"}, []string{"--recent=1", "--no-color"}},
-		{"-- 之后的裸索引不改写", []string{"--", "-1"}, []string{"--", "-1"}},
-		{"-- 前后的索引分开处理", []string{"-1", "--", "-2"}, []string{"--recent=1", "--", "-2"}},
-		{"-- 之后的值也不改写", []string{"--", "--project", "-1"}, []string{"--", "--project", "-1"}},
-		{"显式 --project 保持原样", []string{"--project=-1"}, []string{"--project=-1"}},
-		{"--project 的独立值不能改写", []string{"--project", "-1"}, []string{"--project", "-1"}},
-		{"-p 的独立值不能改写", []string{"-p", "-1"}, []string{"-p", "-1"}},
-		{"-p 的贴值不能被改写", []string{"-p-1"}, []string{"-p-1"}},
-		{"--recent 的独立值不能改写", []string{"--recent", "-1"}, []string{"--recent", "-1"}},
-		{"--indent 的独立值不能改写", []string{"--indent", "-5"}, []string{"--indent", "-5"}},
-		{"组合短选项的独立值不能改写", []string{"-ni", "-1"}, []string{"-ni", "-1"}},
-		{"--workspace 的独立值不能改写", []string{"--workspace", "-1"}, []string{"--workspace", "-1"}},
-		{"-w 的独立值不能改写", []string{"-w", "-1"}, []string{"-w", "-1"}},
-		{"短选项值恰好是 --", []string{"-w", "--", "-1"}, []string{"-w", "--", "--recent=1"}},
-		{"普通项目名", []string{"my-app"}, []string{"my-app"}},
-		{"项目名之后的索引也改写", []string{"my-app", "-1"}, []string{"my-app", "--recent=1"}},
-		{"负号但非数字", []string{"-x"}, []string{"-x"}},
-		{"空参数", nil, []string{}},
+		{"第一个", []string{"-1"}, "-1", 1},
+		{"第九个", []string{"-9"}, "-9", 9},
+		{"与布尔组合", []string{"-n1"}, "-1", 1},
+		{"位置参数之后", []string{"my-app", "-1"}, "", 0},
 	}
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			if got := RewriteIndexArgs(fs, c.in); !slices.Equal(got, c.want) {
-				t.Errorf("RewriteIndexArgs(%v) = %v, 想要 %v", c.in, got, c.want)
+			o, err := parseForTest(t, c.args, config.DefaultConfig())
+			if c.project == "" {
+				// 位置参数与索引同时出现属于冲突，单独在上面的用例里覆盖。
+				if err == nil {
+					t.Fatal("位置参数与索引同时出现应报错")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("解析失败：%v", err)
+			}
+			if o.Project != c.project {
+				t.Errorf("Project = %q，想要 %q", o.Project, c.project)
+			}
+			if !o.index[c.index] {
+				t.Errorf("应记录索引开关 -%d：%v", c.index, o.UsedFlags)
 			}
 		})
+	}
+
+	// 索引短选项不能带值。
+	if _, err := parseForTest(t, []string{"-1=5"}, config.DefaultConfig()); err == nil {
+		t.Fatal("-1=5 应报错")
+	}
+	// 两个索引短选项同时出现应报错。
+	if _, err := parseForTest(t, []string{"-1", "-2"}, config.DefaultConfig()); err == nil {
+		t.Fatal("-1 与 -2 同时出现应报错")
+	} else if !strings.Contains(err.Error(), "索引 -1") || !strings.Contains(err.Error(), "索引 -2") {
+		t.Errorf("错误信息应说明用了哪两个索引：%v", err)
+	}
+}
+
+func TestCheckIndexArgs(t *testing.T) {
+	fs := testFlagSet(t, config.DefaultConfig())
+	cases := []struct {
+		desc    string
+		args    []string
+		wantErr string
+	}{
+		{"单个索引可以", []string{"-1"}, ""},
+		{"九个索引可以", []string{"-9"}, ""},
+		{"两位数报错", []string{"-12"}, "可能是笔误"},
+		{"十报错", []string{"-10"}, "请写 --recent 10"},
+		{"零报错", []string{"-0"}, "从 1 开始"},
+		{"双横线两位数", []string{"--12"}, "请写 --recent 12"},
+		{"双横线零", []string{"--0"}, "从 1 开始"},
+		{"赋值报错", []string{"-1=5"}, "不接受取值"},
+		{"组合里的赋值报错", []string{"-n1=5"}, "索引 -1 不接受取值"},
+		{"-- 之后不检查", []string{"--", "-12"}, ""},
+		{"选项的值不检查", []string{"-p", "-12"}, ""},
+		{"组合选项的值不检查", []string{"-ni", "-12"}, ""},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			err := checkIndexArgs(fs, c.args)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("不该报错：%v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("想要错误，得到 nil")
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("错误信息应包含 %q：%v", c.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestMaxIndexShorthand(t *testing.T) {
+	if maxIndexShorthand < 1 || maxIndexShorthand > 9 {
+		t.Fatalf("maxIndexShorthand = %d，必须在 1..9 之间：索引从 1 开始，且 pflag 的 shorthand 只能是单个字符",
+			maxIndexShorthand)
 	}
 }
 
@@ -508,14 +540,14 @@ func TestHelpOutput(t *testing.T) {
 		"用法: gowork [选项] [项目]",
 		"gowork init <SHELL>",
 		"-p, --project <PROJECT>",
-		"-N, --recent <N>",
+		"-1..-9, --recent <N>",
 		"-i, --indent <N>",
 		"-w, --workspace <DIR>",
 		"-n, --no-color",
 		"-h, --help",
 		"init <SHELL>",
 		"powershell、zsh、sh、fish",
-		"项目名只能写一个",
+		"位置参数只能有一个",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("帮助缺少 %q\n%s", want, got)

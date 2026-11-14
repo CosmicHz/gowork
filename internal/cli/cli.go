@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -26,114 +27,109 @@ type Options struct {
 	Workspace string
 	Help      bool
 	Config    config.Config
-	// Args 是归一化前的原始参数，用于识别“选项名与目录同名”的提示。
+	// Args 是原始参数，用于识别“选项名与目录同名”的提示。
 	Args []string
 	// UsedFlags 是 pflag 实际解析到的选项（规范名）
 	UsedFlags map[string]bool
-	// ProjectAfterTerminator 表示项目名来自 `--` 之后的第一个位置参数；
+	// ProjectAfterTerminator 表示目标选择器“直接写项目名”来自 `--` 之后的第一个位置参数；
 	// 此时按普通名字匹配，不把 -N 解释成索引。
 	ProjectAfterTerminator bool
 	// flags 是本次解析用的 FlagSet；同名提示据此读取真实的短选项与取值规则。
 	flags *pflag.FlagSet
+	// index 记录本次用了哪几个 -N 开关；下标即序号，0 不用。
+	index [maxIndexShorthand + 1]bool
 }
 
+// maxIndexShorthand 是 -1…-9 这组索引短选项的上限，更靠后的项目用 --recent N 指定。
+// 不要将其改为大于 9 的数
+const maxIndexShorthand = 9
+
 // registerFlags 注册全部命令行选项。pflag 负责短选项、组合写法、贴值。
-// -N 改写与同名提示都从这份注册信息读取取值规则。
+// 索引短选项与同名提示都从这份注册信息读取取值规则。
 func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
-	fs.StringVarP(&o.Project, "project", "p", "", "要跳转的项目：完整名称、唯一前缀、-N（按最近修改排序的第 N 个），或仓库地址（自动克隆后进入）")
-	fs.IntVar(&o.Recent, "recent", 0, "按最近修改排序的第 N 个项目（1 起，等价于 -N）")
+	fs.StringVarP(&o.Project, "project", "p", "", "要跳转的项目：完整名称、唯一前缀、-1…-9 或仓库地址")
+	fs.IntVar(&o.Recent, "recent", 0, "按最近修改排序的第 N 个项目（1 起，等价于 -1…-9）")
 	fs.IntVarP(&o.Config.Indent, "indent", "i", cfg.Indent, "左侧缩进空格数")
 	fs.StringVarP(&o.CwdFile, "cwd-file", "c", "", "成功后把目标目录写入该文件，供 shell 函数读取")
 	fs.StringVarP(&o.Workspace, "workspace", "w", "", "工作区根目录；留空则依次读环境变量 GOWORK_WORKSPACE 与配置文件")
 	fs.BoolVarP(&o.Config.NoColor, "no-color", "n", cfg.NoColor, "禁用 ANSI 颜色")
 	fs.BoolVarP(&o.Help, "help", "h", false, "显示帮助并退出")
+
+	// -1…-9 是不带值的开关：pflag 对 bool 选项自动设 NoOptDefVal="true"，
+	// 所以 -1 不会去抢下一个参数。长名字只为满足注册要求，帮助里隐藏。
+	for d := 1; d <= maxIndexShorthand; d++ {
+		name := fmt.Sprintf("index%d", d)
+		fs.BoolVarP(&o.index[d], name, strconv.Itoa(d), false, fmt.Sprintf("按最近修改排序的第 %d 个项目", d))
+		_ = fs.MarkHidden(name)
+	}
+
 	fs.Usage = func() {
 		writeHelp(fs.Output())
 	}
 }
 
-// collisionIgnored 的选项不参与“选项名与目录同名”提示：
-// cwd-file 由 shell 函数自动注入，help 会直接退出。
-var collisionIgnored = map[string]bool{
-	"cwd-file": true,
-	"help":     true,
-}
-
-// RewriteIndexArgs 在解析前把裸写的 -N 改写成 --recent=N，其余参数原样保留。
-// pflag 会把 -1 当成未知 shorthand，所以改写必须先于 Parse；判断某个 token
-// 是否会吃掉下一个参数时直接查 pflag 的注册信息，`-p -1` 的值不会被改坏。
-func RewriteIndexArgs(fs *pflag.FlagSet, args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			out = append(out, args[i:]...)
-			break
-		}
-		if project.IndexPattern.MatchString(arg) {
-			arg = "--recent=" + strings.TrimPrefix(arg, "-")
-		}
-		out = append(out, arg)
-
-		// `-flag value` 形式：值原样跟在后面，不能当位置参数改写。
-		if optionConsumesNext(fs, args[i]) && i+1 < len(args) {
-			i++
-			out = append(out, args[i])
-		}
+// ignoredOption 判断选项是否不参与“选项名与目录同名”提示：
+// cwd-file 由 shell 函数自动注入，help 会直接退出；
+// 索引短选项的歧义由 project.Resolve 负责，否则会重复提示。
+func ignoredOption(name string) bool {
+	switch name {
+	case "cwd-file", "help":
+		return true
 	}
-	return out
-}
-
-// projectAfterTerminator 判断第一个位置参数是否紧跟在 `--` 之后。
-// 带值选项会先吃掉下一个参数，所以 `--workspace -- -1` 里的 `--` 是值而不是终止符。
-func projectAfterTerminator(fs *pflag.FlagSet, args []string) bool {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			return i+1 < len(args)
-		}
-		if optionConsumesNext(fs, arg) {
-			i++
-			continue
-		}
-		if isFlagToken(arg) {
-			continue
-		}
+	rest, ok := strings.CutPrefix(name, "index")
+	if !ok {
 		return false
 	}
-	return false
+	d, err := strconv.Atoi(rest)
+	return err == nil && d >= 1 && d <= maxIndexShorthand
+}
+
+// checkIndexArgs 在解析前拦下短选项表达不了的索引写法。
+// pflag 会把 -12 拆成 -1 与 -2 两个开关，把 -11 / -22 这类重复数字静默当成第 1 / 2 个，
+// -10 则会因 -0 未注册而报难懂的 “unknown shorthand”。
+// 带参选项的值（如 `-p -12`）不会被拦下。
+func checkIndexArgs(fs *pflag.FlagSet, args []string) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return nil
+		}
+		if m := project.LongIndexPattern.FindStringSubmatch(arg); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			if n < 1 {
+				return errors.New("项目索引从 1 开始")
+			}
+			return fmt.Errorf("%s 可能是笔误：请写 --recent %d", arg, n)
+		}
+		if m := project.IndexValuePattern.FindStringSubmatch(arg); m != nil {
+			return fmt.Errorf("索引 -%s 不接受取值", m[1])
+		}
+		// -n1=5 这类组合里的索引赋值同样不接受。
+		if spelling, names, ok := optionToken(fs, arg); ok &&
+			len(arg) > len(spelling) && arg[len(spelling)] == '=' &&
+			strings.HasPrefix(names[len(names)-1], "index") {
+			return fmt.Errorf("索引 %s 不接受取值", "-"+spelling[len(spelling)-1:])
+		}
+		if m := project.IndexPattern.FindStringSubmatch(arg); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			switch {
+			case n < 1:
+				return errors.New("项目索引从 1 开始")
+			case n > maxIndexShorthand:
+				return fmt.Errorf("%s 可能是笔误：短选项只支持 -1 到 -%d，第 %d 个请写 --recent %d",
+					arg, maxIndexShorthand, n, n)
+			}
+		}
+		if optionConsumesNext(fs, arg) && i+1 < len(args) {
+			i++
+		}
+	}
+	return nil
 }
 
 // isFlagToken 判断 token 是否像选项；单独的 "-" 与 "--" 不算。
 func isFlagToken(arg string) bool {
 	return len(arg) > 1 && arg[0] == '-' && arg != "--"
-}
-
-// collisionWarnings 汇总 CLI 语义造成的同名歧义：init 子命令与选项名。
-// -N 索引的歧义由 project.Resolve 负责，因为那一层本来就要解释索引。
-func collisionWarnings(fs *pflag.FlagSet, projectArg string, args []string, used map[string]bool, projects []project.Project) []project.Warning {
-	var warnings []project.Warning
-	if w, ok := initCollisionWarning(projectArg, projects); ok {
-		warnings = append(warnings, w)
-	}
-	warnings = append(warnings, optionCollisionWarnings(fs, args, used, projects)...)
-	return warnings
-}
-
-// initCollisionWarning 在工作区里存在名为 init 的目录时说明子命令与项目的区别。
-func initCollisionWarning(projectArg string, projects []project.Project) (project.Warning, bool) {
-	if projectArg != "init" {
-		return project.Warning{}, false
-	}
-	for _, p := range projects {
-		if strings.EqualFold(p.Name, "init") {
-			return project.Warning{
-				Message: `"init" 同时是工作区里的目录名与 shell 集成子命令；通过 work 调用时按项目进入`,
-				Details: []string{fmt.Sprintf("直接运行 gowork init <shell> 会输出集成代码；要明确进入该目录请写 work ./%s", p.Name)},
-			}, true
-		}
-	}
-	return project.Warning{}, false
 }
 
 // optionCollisionWarnings 找出被实际解析为选项、且与工作区目录同名的写法。
@@ -249,7 +245,7 @@ func optionToken(fs *pflag.FlagSet, arg string) (spelling string, names []string
 // optionUsed 判断这组选项里是否有真正生效、且需要参与冲突提示的项。
 func optionUsed(names []string, used map[string]bool) bool {
 	for _, name := range names {
-		if collisionIgnored[name] {
+		if ignoredOption(name) {
 			continue
 		}
 		if used[name] {
@@ -259,25 +255,40 @@ func optionUsed(names []string, used map[string]bool) bool {
 	return false
 }
 
-// recentSelector 返回用户实际写下的“最近项目”写法，供冲突提示使用：
-// 裸索引原样返回 `索引 -2`，显式选项统一说 `--recent`。
-func recentSelector(fs *pflag.FlagSet, args []string) string {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			break
-		}
-		if project.IndexPattern.MatchString(arg) {
-			return "索引 " + arg
-		}
-		if arg == "--recent" || strings.HasPrefix(arg, "--recent=") {
-			return "--recent"
-		}
-		if optionConsumesNext(fs, arg) && i+1 < len(args) {
-			i++
-		}
+// targetSelectors 按固定顺序列出本次用到的目标选择器，供冲突提示使用：
+// 直接写的项目名、--project、--recent、-N 都算。
+// 同时返回用到的索引序号（没用 -N 时为 0）。
+func targetSelectors(positional string, used map[string]bool, index [maxIndexShorthand + 1]bool) ([]string, int) {
+	var selectors []string
+	if positional != "" {
+		selectors = append(selectors, "项目名 "+positional)
 	}
-	return "--recent"
+	if used["project"] {
+		selectors = append(selectors, "--project")
+	}
+	if used["recent"] {
+		selectors = append(selectors, "--recent")
+	}
+
+	chosen := 0
+	for d := 1; d <= maxIndexShorthand; d++ {
+		if !index[d] {
+			continue
+		}
+		if chosen == 0 {
+			chosen = d
+		}
+		selectors = append(selectors, fmt.Sprintf("索引 -%d", d))
+	}
+	return selectors, chosen
+}
+
+// joinSelectors 把目标选择器连成一句：两种用“和”，更多种用顿号。
+func joinSelectors(selectors []string) string {
+	if len(selectors) == 2 {
+		return selectors[0] + " 和 " + selectors[1]
+	}
+	return strings.Join(selectors, "、")
 }
 
 // parseWith 把命令行解析结果与配置默认值合并。数值与开关先取配置文件的值，
@@ -286,9 +297,11 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 	o := Options{Config: cfg, Args: args}
 	registerFlags(fs, &o, cfg)
 
-	// 裸 -N 必须先改写：pflag 会把 -1 当成未知 shorthand。
-	normalized := RewriteIndexArgs(fs, args)
-	if err := fs.Parse(normalized); err != nil {
+	// -10、-12、-0 这类写法 pflag 处理不了或会静默出错，先拦下来。
+	if err := checkIndexArgs(fs, args); err != nil {
+		return o, err
+	}
+	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
 	o.flags = fs
@@ -305,26 +318,25 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 		return o, fmt.Errorf("只能指定一个项目，多写了：%s", strings.Join(rest[1:], "、"))
 	}
 
-	// 两种方式各指定了一次。
-	if o.UsedFlags["project"] && o.UsedFlags["recent"] {
-		return o, errors.New("只能指定一个项目，这次同时用了 --project 和 --recent")
-	}
+	// 用多种方式指定了项目：项目名也算一种目标选择器。
 	positional := fs.Arg(0)
-	if positional != "" && o.UsedFlags["project"] {
-		return o, fmt.Errorf("只能指定一个项目，这次同时用了项目名 %s 和 --project", positional)
-	}
-	if positional != "" && o.UsedFlags["recent"] {
-		return o, fmt.Errorf("只能指定一个项目，这次同时用了项目名 %s 和 %s", positional, recentSelector(fs, args))
+	selectors, index := targetSelectors(positional, o.UsedFlags, o.index)
+	if len(selectors) > 1 {
+		return o, fmt.Errorf("只能指定一个项目，这次同时用了 %s", joinSelectors(selectors))
 	}
 	if o.UsedFlags["recent"] && o.Recent < 1 {
 		return o, fmt.Errorf("--recent=%d 小于最小值 1", o.Recent)
 	}
 	if o.Project == "" {
-		if o.Recent > 0 {
+		switch {
+		case index > 0:
+			o.Project = fmt.Sprintf("-%d", index)
+		case o.Recent > 0:
 			o.Project = fmt.Sprintf("-%d", o.Recent)
-		} else {
+		default:
 			o.Project = positional
-			o.ProjectAfterTerminator = o.Project != "" && projectAfterTerminator(fs, normalized)
+			// ArgsLenAtDash 是 `--` 之前的位置参数个数；为 0 说明第一个位置参数来自 `--` 之后。
+			o.ProjectAfterTerminator = positional != "" && fs.ArgsLenAtDash() == 0
 		}
 	}
 	if o.Config.Indent < config.MinIndent {
@@ -339,30 +351,36 @@ func Parse(args []string, cfg config.Config) (Options, error) {
 	return parseWith(fs, args, cfg)
 }
 
-// runSubcommand 处理 argv[1] 上的旁路子命令（init / complete），返回是否已处理。
-// shell 函数会把 --cwd-file 注入到 argv[1]，所以通过 work 调用时这里永远返回 false，
-// 用户写的名字会按项目名解析；子命令只支持直接运行二进制。
+// shellArgIndex 是子命令所在的位置，也是 shell 函数注入内部参数的位置。
+// shell 函数总在用户参数之前插入一个参数（当前是 --cwd-file），占住这里，
+// 因此通过 work 调用时 init / complete 永远到不了子命令分支；
+// 只有直接运行 gowork 时，这个位置才可能是用户写的子命令。
+const shellArgIndex = 1
+
+// runSubcommand 处理 shellArgIndex 位置上的旁路子命令（init / complete）。
+// 它只认位置、不认注入参数的名字：这个位置被 shell 占用时，用户写的名字
+// 就会按项目名解析。
 func runSubcommand(args []string, out io.Writer) (bool, error) {
-	if len(args) < 2 {
+	if len(args) <= shellArgIndex {
 		return false, nil
 	}
-	switch args[1] {
+	switch args[shellArgIndex] {
 	case "init":
-		return true, shell.Init(args[2:], out)
+		return true, shell.Init(args[shellArgIndex+1:], out)
 	case "complete":
-		return true, completeSubcommand(args[2:], out)
+		return true, completeSubcommand(args[shellArgIndex+1:], out)
 	}
 	return false, nil
 }
 
-// Main 是命令行的完整流程：init / complete 子命令、裸索引改写、解析与执行。
+// Main 是命令行的完整流程：init / complete 子命令、索引校验、解析与执行。
 func Main(args []string) {
 	// 整个程序直写控制台，先打开 ANSI 解析与 UTF-8 代码页。
 	sysinfo.EnableVT()
 
 	// init / complete 都是只读旁路，不解析项目参数。
-	// shell 函数会把 --cwd-file 放在最前面，所以 `work init` / `work complete`
-	// 里的名字仍是项目名，不会走到这里。
+	// shell 函数会把一个内部参数注入到 shellArgIndex 位置，所以 `work init` /
+	// `work complete` 里的名字仍是项目名，不会走到这里。
 	if handled, err := runSubcommand(args, os.Stdout); handled {
 		if err != nil {
 			sysinfo.Fail(err, 2, false)
@@ -376,9 +394,9 @@ func Main(args []string) {
 		cfg = config.DefaultConfig()
 	}
 
-	// parseWith 内部会先改写裸 -N（-1 = 最近修改的第一个）。
-	// pflag 会把裸写的 -1 当成未知 shorthand；统一改写后，PowerShell 与 POSIX
-	// 的 shell 函数、直接调 exe 三种入口的行为就一致了。
+	// parseWith 内部会先校验索引写法（-10 及以上要改用 --recent），再交给 pflag。
+	// pflag 把裸写的 -1 当成短选项，PowerShell 与 POSIX 的 shell 函数、
+	// 直接调 exe 三种入口的行为因此一致。
 	// 用 ContinueOnError 自己处理错误：pflag 的 ExitOnError 会把错误打到 stdout。
 	fs := pflag.NewFlagSet(args[0], pflag.ContinueOnError)
 	o, err := parseWith(fs, args[1:], cfg)
@@ -445,7 +463,7 @@ func Run(o Options, cfg config.Config) error {
 		}
 	}
 
-	warnings = append(warnings, collisionWarnings(o.flags, o.Project, o.Args, o.UsedFlags, projects)...)
+	warnings = append(warnings, optionCollisionWarnings(o.flags, o.Args, o.UsedFlags, projects)...)
 	r.Render(target, projects, warnings)
 
 	if o.CwdFile != "" {

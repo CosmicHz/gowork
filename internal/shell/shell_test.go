@@ -116,11 +116,13 @@ func TestPowerShellAcceptsNativeArgs(t *testing.T) {
 
 	for i, c := range cases {
 		got := calls[i]
-		if len(got) == 0 || !strings.HasPrefix(got[0], "--cwd-file=") {
-			t.Errorf("%s：第一次调用缺少 cwd-file：%v", c.name, got)
+		// 第一个参数必须由 work 函数自己注入；这里只要求它是个选项，
+		// 不绑定具体名字，避免把内部参数写死成 cwd-file。
+		if len(got) == 0 || !strings.HasPrefix(got[0], "-") {
+			t.Errorf("%s：第一次调用缺少内部参数：%v", c.name, got)
 			continue
 		}
-		// 第一项是函数自己注入的 cwd-file，之后才是用户参数。
+		// 第一项是函数自己注入的内部参数，之后才是用户参数。
 		got = got[1:]
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s：得到 %v，想要 %v", c.name, got, c.want)

@@ -94,8 +94,9 @@ func TestCompleteSubcommandProjects(t *testing.T) {
 	}
 }
 
-// TestRunSubcommand 钉住子命令只在 argv[1] 生效。
-// shell 函数总把 --cwd-file 注入到 argv[1]，所以 work 里的 init / complete 是项目名。
+// TestRunSubcommand 钉住子命令只在 shellArgIndex 位置生效，且只看位置、不看注入参数的名字。
+// shell 函数总会在这个位置注入一个内部参数（当前是 --cwd-file），
+// 所以 work 里的 init / complete 是项目名。
 func TestRunSubcommand(t *testing.T) {
 	cases := []struct {
 		desc    string
@@ -106,6 +107,8 @@ func TestRunSubcommand(t *testing.T) {
 		{"complete 直连", []string{"gowork", "complete", "bogus"}, true},
 		{"cwd-file 之后的 complete 是项目名", []string{"gowork", "--cwd-file=/tmp/x", "complete"}, false},
 		{"cwd-file 之后的 init 是项目名", []string{"gowork", "--cwd-file=/tmp/x", "init"}, false},
+		{"换一个内部参数名也一样", []string{"gowork", "--internal", "init"}, false},
+		{"短选项作内部参数也一样", []string{"gowork", "-x", "complete"}, false},
 		{"第二位置参数不是子命令", []string{"gowork", "my-app", "complete"}, false},
 		{"普通项目", []string{"gowork", "my-app"}, false},
 		{"没有参数", []string{"gowork"}, false},

@@ -26,8 +26,14 @@ type Warning struct {
 }
 
 // IndexPattern 匹配 -1 / -2 / ... 形式的“按最近修改排序的第 N 个项目”。
-// cli 改写裸索引参数时也用它，避免两处各写一份。
+// cli 校验索引写法时也用它，避免两处各写一份。
 var IndexPattern = regexp.MustCompile(`^-(\d+)$`)
+
+// IndexValuePattern 匹配 -1=5 这类给索引短选项赋值的写法；索引短选项不接受取值。
+var IndexValuePattern = regexp.MustCompile(`^-(\d+)=`)
+
+// LongIndexPattern 匹配 --12 这类把索引写成双横线的笔误。
+var LongIndexPattern = regexp.MustCompile(`^--(\d+)$`)
 
 // List 列出工作区下的子目录，跳过 . 开头的隐藏目录，按最近修改时间倒序。
 // 工作区不存在时返回空列表，由 Resolve 统一报“目录不存在”。
@@ -62,7 +68,7 @@ func Resolve(workspace, want string, projects []Project) (string, []Warning, err
 }
 
 // ResolveWithoutIndex 与 Resolve 相同，但不把 -N 解释成索引。
-// 用于 `--` 之后的第一个位置参数：`work -- -1` 按普通名字匹配 -1。
+// 用于目标选择器“直接写项目名”来自 `--` 之后的情况：`work -- -1` 按普通名字匹配 -1。
 func ResolveWithoutIndex(workspace, want string, projects []Project) (string, []Warning, error) {
 	return resolve(workspace, want, projects, false)
 }
