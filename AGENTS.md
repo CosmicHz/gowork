@@ -7,7 +7,8 @@
 
 - 跨 Windows / macOS / Linux（含 WSL）的项目跳板 + 环境仪表盘。
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
-- 只有两个依赖：`golang.org/x/term`（终端宽度判断）与 `golang.org/x/sys`（Windows 控制台、磁盘空间）。
+- 只有三个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）
+  与 `github.com/spf13/pflag`（命令行解析）。
 - 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`ansi`、`cli`、`config`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
 - shell 侧只有一层壳：`gowork init <shell>` 打印函数代码（zsh 还带补全），用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
