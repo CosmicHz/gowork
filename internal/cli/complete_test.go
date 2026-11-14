@@ -109,7 +109,7 @@ func TestRunSubcommand(t *testing.T) {
 		{"cwd-file 之后的 init 是项目名", []string{"gowork", "--cwd-file=/tmp/x", "init"}, false},
 		{"换一个内部参数名也一样", []string{"gowork", "--internal", "init"}, false},
 		{"短选项作内部参数也一样", []string{"gowork", "-x", "complete"}, false},
-		{"第二位置参数不是子命令", []string{"gowork", "my-app", "complete"}, false},
+		{"第二个项目名不是子命令", []string{"gowork", "my-app", "complete"}, false},
 		{"普通项目", []string{"gowork", "my-app"}, false},
 		{"没有参数", []string{"gowork"}, false},
 	}

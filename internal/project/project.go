@@ -68,7 +68,7 @@ func Resolve(workspace, want string, projects []Project) (string, []Warning, err
 }
 
 // ResolveWithoutIndex 与 Resolve 相同，但不把 -N 解释成索引。
-// 用于目标选择器“直接写项目名”来自 `--` 之后的情况：`work -- -1` 按普通名字匹配 -1。
+// 用于项目名来自 `--` 之后的情况：`work -- -1` 按普通名字匹配 -1。
 func ResolveWithoutIndex(workspace, want string, projects []Project) (string, []Warning, error) {
 	return resolve(workspace, want, projects, false)
 }

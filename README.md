@@ -328,19 +328,19 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 
 ### 选项一览
 
-目标选择器只能三选一：**直接写项目名**、**`--project`**、**`--recent` / `-1`…`-9`**。
+项目选择器只能三选一：**直接写项目名**、**`--project`**、**`--recent` / `-1`…`-9`**。
 
-#### 目标选择器
+#### 项目选择器
 
 | 写法 | Windows PowerShell | 说明 | 范例 |
 | --- | --- | --- | --- |
 | `work <项目名>` | 不变 | 完整项目名、唯一前缀或仓库地址 | `work my-project` |
-| `work -p <目标>` / `work --project <目标>` | `-Project <目标>`（`-Proj` / `-P`） | 与直接写项目名互斥 | `work --project my-pro` / `work --project -1` |
-| `work -1` … `work -9` / `work --recent <N>` | 不变 | 最近修改的第 N 个（1 起）；与直接写项目名、`--project` 互斥 | `work -1` / `work --recent 10` |
+| `work -p <目标>` / `work --project <目标>` | `-Project <目标>`（`-Proj` / `-P`） | `<目标>` 可填项目名（即上一行所说的）或 `-N` 形式，表示最近修改的第 N 个 | `work --project my-pro` / `work --project -1` |
+| `work -1` … `work -9` / `work --recent <N>` | 不变 | 最近修改的第 N 个（1 起）；`work -N` 的写法中，`N` 只能取 1~9 | `work -1` / `work --recent 10` |
 
 `--project -<N>` （或 `--project=-<N>`）等价于 `--recent <N>`；N 在 1–9 时也等价于 `-N`。
 
-目标选择器之间是互斥的，同时传入多个选择器（即便彼此等价）会报错。
+项目选择器之间是互斥的，同时传入多个（即便彼此等价）会报错。
 
 #### 其余选项
 
@@ -355,16 +355,15 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风格选项；macOS / Linux 不支持 PowerShell 风格选项。
 
 带参数的长选项同时接受 `--opt value` 和 `--opt=value`；布尔选项写 `--opt` 或
-`--opt=<true|false>`，不要写 `--no-color false` 这样的选项。长选项必须用双横线；
+`--opt=<true|false>`，不要写 `--opt <true|false>` 这样的选项。长选项必须用双横线；
 单横线只表示短选项（`-n`、`-p foo`、`-pfoo`、`-ni5`）。
 
-短选项可以组合：`-ni 5` 等价于 `--no-color --indent 5`，`-ni5` 等价于
-`--no-color --indent=5`。带值选项后面的剩余字符会整体作为它的值（如 `-p-1` 等价于 `--project=-1`）。
+短选项可以组合：`-ni 5` 或 `-ni5` 等价于 `--no-color --indent=5`。带值选项后面的剩余字符会整体作为它的值（如 `-p-1` 等价于 `--project=-1`）。
 
 `--` 之后的参数不再按选项解析，而是当作传入的项目名：`work -- --no-color`
-会去找名为 `--no-color` 的项目，不会关闭颜色；位置参数只能有一个，多写会报错。
+会去找名为 `--no-color` 的项目，不会关闭颜色；项目名只能写一个，多写会报错。
 
-> [!important]
+> [!IMPORTANT]
 > 在 PowerShell 中， `--` 无效。
 > 例如进入名为 `-1` 的目录可以写 `work ./-1` ，不能写 `work -- -1` 。
 > 未来的版本可能修复这个问题。
@@ -409,11 +408,11 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 如果的确出现这种情况，仪表盘下方会给出提示。
 
-### `init` 与目录同名
+### 子命令与目录同名
 
-`gowork init <shell>` 是输出 shell 集成代码的子命令，但 shell 函数总在用户参数之前插入
-一个内部参数（当前是 `--cwd-file`），所以 `work init` 里的 `init` 是项目名。工作区里若真有名为 `init` 的目录，
-`work init` 会直接进入它；想完全避免歧义可以写 `work ./init`。
+`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）
+都只在直接运行 `gowork` 时生效。shell 函数总在用户参数之前插入一个内部参数，占住子命令所在的位置，所以 `work init` / `work complete` 里的名字是项目名。
+工作区里若真有名为 `init` 或 `complete` 的目录，`work init` / `work complete` 会直接进入它。
 
 ### 选项名与目录同名
 
@@ -425,7 +424,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
       要进入该目录请写 work ./-n
 ```
 
-`--cwd-file` 由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的参数也不参与。
+`--cwd-file` 是内部选项，由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的参数也不参与（因为不被解析为选项）。
 
 ### 仓库地址
 
@@ -510,7 +509,6 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 ./bin/gowork --workspace ~/Projects --project my-app --no-color
 ```
 
-`-1`…`-9` 是真正的短选项，三种入口都认；第 10 个及以后写 `--recent N`，例如 `work --recent 12`。
 `--no-color` 只关闭颜色；清屏和窗口标题由「stdout 是否是真实终端」决定，与它无关。
 `--cwd-file <路径>` 把目标目录写进文件。（shell 函数就是靠它回传的）
 
@@ -585,6 +583,9 @@ gowork 会把目标目录写进 `--cwd-file` 指定的临时文件，由 shell �
   `-i` / `--recent` 补数字、输入 `-` 补 `-1`…`-9`。补全依赖 zsh 的 `compinit`，
   没加载时静默跳过。oh-my-zsh / prezto 等框架通常已经加载它；手动配置的 zsh 需要在
   `eval "$(gowork init zsh)"` 之前有一句 `autoload -Uz compinit && compinit`。
+
+  > [!NOTE]
+  > 开发者认为，目前自动补全的提效作用极其有限。不保证会一直支持这个功能。
 
 ## 已知限制
 

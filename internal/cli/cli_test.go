@@ -41,7 +41,7 @@ func TestParseUsesConfigDefaults(t *testing.T) {
 		t.Errorf("应使用配置默认值：%+v", o.Config)
 	}
 	if o.Project != "my-app" {
-		t.Errorf("位置参数应成为项目名：%q", o.Project)
+		t.Errorf("项目名 = %q", o.Project)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestShorthandValueAfterProject(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if o.Project != "my-app" || o.Config.Indent != 5 {
-		t.Errorf("位置参数后的短选项应生效：project=%q indent=%d", o.Project, o.Config.Indent)
+		t.Errorf("项目名后的短选项应生效：project=%q indent=%d", o.Project, o.Config.Indent)
 	}
 }
 
@@ -264,9 +264,9 @@ func TestOptionCollisionWarnings(t *testing.T) {
 		{"短选项组合", []string{"-ni", "5"}, map[string]bool{"no-color": true, "indent": true}, []string{"-ni"}},
 		{"重复选项去重", []string{"-n", "-n"}, map[string]bool{"no-color": true}, []string{"-n"}},
 		{"cwd-file 不提示", []string{"-c", "x"}, map[string]bool{"cwd-file": true}, nil},
-		{"位置参数后的未使用选项", []string{"my-app", "-n"}, map[string]bool{}, nil},
+		{"项目名后的未使用选项", []string{"my-app", "-n"}, map[string]bool{}, nil},
 		{"未使用的短选项", []string{"-i", "5"}, map[string]bool{}, nil},
-		{"位置参数后同名选项仍提示", []string{"-n", "my-app", "--no-color"}, map[string]bool{"no-color": true}, []string{"-n", "--no-color"}},
+		{"项目名后同名选项仍提示", []string{"-n", "my-app", "--no-color"}, map[string]bool{"no-color": true}, []string{"-n", "--no-color"}},
 		{"-- 后同名选项不提示", []string{"-n", "--", "--no-color"}, map[string]bool{"no-color": true}, []string{"-n"}},
 		{"作为选项值的 token 不提示", []string{"-p", "--no-color"}, map[string]bool{"project": true, "no-color": true}, []string{"-p"}},
 		{"组合选项的值不提示", []string{"-ni", "--no-color"}, map[string]bool{"no-color": true, "indent": true}, []string{"-ni"}},
@@ -300,7 +300,7 @@ func TestOptionsAfterProjectAreParsed(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if !o.Config.NoColor {
-		t.Fatal("位置参数之后的 -n 应生效")
+		t.Fatal("项目名之后的 -n 应生效")
 	}
 	if o.Project != "my-app" {
 		t.Errorf("项目名不应被选项解析改变：%q", o.Project)
@@ -309,7 +309,7 @@ func TestOptionsAfterProjectAreParsed(t *testing.T) {
 
 func TestParseRejectsUnknownOptionAfterProject(t *testing.T) {
 	if _, err := parseForTest(t, []string{"my-app", "--unknown"}, config.DefaultConfig()); err == nil {
-		t.Fatal("位置参数之后的未知选项应报错，而不是静默忽略")
+		t.Fatal("项目名之后的未知选项应报错，而不是静默忽略")
 	}
 }
 
@@ -319,8 +319,8 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"两个位置参数", []string{"my-app", "other"}, "other"},
-		{"三个位置参数", []string{"my-app", "other", "third"}, "other、third"},
+		{"两个项目名", []string{"my-app", "other"}, "other"},
+		{"三个项目名", []string{"my-app", "other", "third"}, "other 和 third"},
 		{"终止符之后", []string{"--", "-1", "-2"}, "-2"},
 		{"终止符之前之后", []string{"my-app", "--", "other"}, "other"},
 	}
@@ -329,7 +329,7 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := parseForTest(t, c.args, config.DefaultConfig())
 			if err == nil {
-				t.Fatal("多个位置参数应报错")
+				t.Fatal("多个项目名应报错")
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("错误信息应列出多写的项目 %q：%v", c.want, err)
@@ -337,16 +337,16 @@ func TestParseRejectsMultipleProjects(t *testing.T) {
 		})
 	}
 
-	// 单个位置参数不受影响。
+	// 单个项目名不受影响。
 	o, err := parseForTest(t, []string{"my-app"}, config.DefaultConfig())
 	if err != nil {
-		t.Fatalf("单个位置参数不该报错：%v", err)
+		t.Fatalf("单个项目名不该报错：%v", err)
 	}
 	if o.Project != "my-app" {
 		t.Errorf("项目名 = %q，想要 my-app", o.Project)
 	}
 
-	// 帮助优先于位置参数校验。
+	// 帮助优先于项目名校验。
 	o, err = parseForTest(t, []string{"-h", "my-app", "other"}, config.DefaultConfig())
 	if err != nil {
 		t.Fatalf("带 -h 时不该报错：%v", err)
@@ -362,17 +362,17 @@ func TestParseRejectsProjectWithTargetFlag(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"位置参数之后 --recent", []string{"my-app", "--recent", "2"}, "项目名 my-app 和 --recent"},
-		{"位置参数之后 --project", []string{"my-app", "--project", "other"}, "项目名 my-app 和 --project"},
-		{"位置参数之后 -1", []string{"my-app", "-1"}, "项目名 my-app 和 索引 -1"},
-		{"位置参数之前 --recent", []string{"--recent", "2", "my-app"}, "项目名 my-app 和 --recent"},
-		{"位置参数之前 --project", []string{"--project", "other", "my-app"}, "项目名 my-app 和 --project"},
+		{"项目名之后 --recent", []string{"my-app", "--recent", "2"}, "项目名 my-app 和 --recent"},
+		{"项目名之后 --project", []string{"my-app", "--project", "other"}, "项目名 my-app 和 --project"},
+		{"项目名之后 -1", []string{"my-app", "-1"}, "项目名 my-app 和 索引 -1"},
+		{"项目名之前 --recent", []string{"--recent", "2", "my-app"}, "项目名 my-app 和 --recent"},
+		{"项目名之前 --project", []string{"--project", "other", "my-app"}, "项目名 my-app 和 --project"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := parseForTest(t, c.args, config.DefaultConfig())
 			if err == nil {
-				t.Fatal("位置参数与其它目标选择器同时出现应报错")
+				t.Fatal("项目名与其它项目选择器同时出现应报错")
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("错误信息应说明用哪两种方式指定了项目（%q）：%v", c.want, err)
@@ -404,13 +404,13 @@ func TestParseRecordsRawArgsAndUsedFlags(t *testing.T) {
 		t.Errorf("应记录实际生效的选项：%v", o.UsedFlags)
 	}
 
-	// 位置参数之后的 -n 由 pflag 的 interspersed 解析。
+	// 项目名之后的 -n 由 pflag 的 interspersed 解析。
 	o, err = parseForTest(t, []string{"my-app", "-n"}, config.DefaultConfig())
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if !o.UsedFlags["no-color"] {
-		t.Errorf("位置参数之后的选项应算作已使用：%v", o.UsedFlags)
+		t.Errorf("项目名之后的选项应算作已使用：%v", o.UsedFlags)
 	}
 	if o.Project != "my-app" {
 		t.Errorf("项目名不应被选项解析改变：%q", o.Project)
@@ -427,16 +427,16 @@ func TestParseIndexShorthand(t *testing.T) {
 		{"第一个", []string{"-1"}, "-1", 1},
 		{"第九个", []string{"-9"}, "-9", 9},
 		{"与布尔组合", []string{"-n1"}, "-1", 1},
-		{"位置参数之后", []string{"my-app", "-1"}, "", 0},
+		{"项目名之后", []string{"my-app", "-1"}, "", 0},
 	}
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
 			o, err := parseForTest(t, c.args, config.DefaultConfig())
 			if c.project == "" {
-				// 位置参数与索引同时出现属于冲突，单独在上面的用例里覆盖。
+				// 项目名与索引同时出现属于冲突，单独在上面的用例里覆盖。
 				if err == nil {
-					t.Fatal("位置参数与索引同时出现应报错")
+					t.Fatal("项目名与索引同时出现应报错")
 				}
 				return
 			}
@@ -547,7 +547,7 @@ func TestHelpOutput(t *testing.T) {
 		"-h, --help",
 		"init <SHELL>",
 		"powershell、zsh、sh、fish",
-		"位置参数只能有一个",
+		"只允许用一种方式指定一个项目",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("帮助缺少 %q\n%s", want, got)

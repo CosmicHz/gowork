@@ -31,7 +31,7 @@ type Options struct {
 	Args []string
 	// UsedFlags 是 pflag 实际解析到的选项（规范名）
 	UsedFlags map[string]bool
-	// ProjectAfterTerminator 表示目标选择器“直接写项目名”来自 `--` 之后的第一个位置参数；
+	// ProjectAfterTerminator 表示项目名来自 `--` 之后；
 	// 此时按普通名字匹配，不把 -N 解释成索引。
 	ProjectAfterTerminator bool
 	// flags 是本次解析用的 FlagSet；同名提示据此读取真实的短选项与取值规则。
@@ -255,10 +255,10 @@ func optionUsed(names []string, used map[string]bool) bool {
 	return false
 }
 
-// targetSelectors 按固定顺序列出本次用到的目标选择器，供冲突提示使用：
+// projectSelectors 按固定顺序列出本次用到的项目选择器，供冲突提示使用：
 // 直接写的项目名、--project、--recent、-N 都算。
 // 同时返回用到的索引序号（没用 -N 时为 0）。
-func targetSelectors(positional string, used map[string]bool, index [maxIndexShorthand + 1]bool) ([]string, int) {
+func projectSelectors(positional string, used map[string]bool, index [maxIndexShorthand + 1]bool) ([]string, int) {
 	var selectors []string
 	if positional != "" {
 		selectors = append(selectors, "项目名 "+positional)
@@ -283,12 +283,12 @@ func targetSelectors(positional string, used map[string]bool, index [maxIndexSho
 	return selectors, chosen
 }
 
-// joinSelectors 把目标选择器连成一句：两种用“和”，更多种用顿号。
-func joinSelectors(selectors []string) string {
-	if len(selectors) == 2 {
-		return selectors[0] + " 和 " + selectors[1]
+// joinWords 把列表拼成一句：两项用“和”，更多项用顿号。
+func joinWords(items []string) string {
+	if len(items) == 2 {
+		return items[0] + " 和 " + items[1]
 	}
-	return strings.Join(selectors, "、")
+	return strings.Join(items, "、")
 }
 
 // parseWith 把命令行解析结果与配置默认值合并。数值与开关先取配置文件的值，
@@ -315,14 +315,15 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 
 	// 同一方式写了两次：用户指定了多个项目。
 	if rest := fs.Args(); len(rest) > 1 {
-		return o, fmt.Errorf("只能指定一个项目，多写了：%s", strings.Join(rest[1:], "、"))
+		return o, fmt.Errorf("只能指定一个项目，多写了：%s", joinWords(rest[1:]))
 	}
 
-	// 用多种方式指定了项目：项目名也算一种目标选择器。
+	// 用多种方式指定了项目
+
 	positional := fs.Arg(0)
-	selectors, index := targetSelectors(positional, o.UsedFlags, o.index)
+	selectors, index := projectSelectors(positional, o.UsedFlags, o.index)
 	if len(selectors) > 1 {
-		return o, fmt.Errorf("只能指定一个项目，这次同时用了 %s", joinSelectors(selectors))
+		return o, fmt.Errorf("只能指定一个项目，这次同时用了 %s", joinWords(selectors))
 	}
 	if o.UsedFlags["recent"] && o.Recent < 1 {
 		return o, fmt.Errorf("--recent=%d 小于最小值 1", o.Recent)
@@ -335,7 +336,7 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 			o.Project = fmt.Sprintf("-%d", o.Recent)
 		default:
 			o.Project = positional
-			// ArgsLenAtDash 是 `--` 之前的位置参数个数；为 0 说明第一个位置参数来自 `--` 之后。
+			// ArgsLenAtDash 是 `--` 之前的参数个数；为 0 说明项目名来自 `--` 之后。
 			o.ProjectAfterTerminator = positional != "" && fs.ArgsLenAtDash() == 0
 		}
 	}
@@ -352,7 +353,7 @@ func Parse(args []string, cfg config.Config) (Options, error) {
 }
 
 // shellArgIndex 是子命令所在的位置，也是 shell 函数注入内部参数的位置。
-// shell 函数总在用户参数之前插入一个参数（当前是 --cwd-file），占住这里，
+// shell 函数总在用户参数之前插入一个参数，占住这里，
 // 因此通过 work 调用时 init / complete 永远到不了子命令分支；
 // 只有直接运行 gowork 时，这个位置才可能是用户写的子命令。
 const shellArgIndex = 1
@@ -395,8 +396,6 @@ func Main(args []string) {
 	}
 
 	// parseWith 内部会先校验索引写法（-10 及以上要改用 --recent），再交给 pflag。
-	// pflag 把裸写的 -1 当成短选项，PowerShell 与 POSIX 的 shell 函数、
-	// 直接调 exe 三种入口的行为因此一致。
 	// 用 ContinueOnError 自己处理错误：pflag 的 ExitOnError 会把错误打到 stdout。
 	fs := pflag.NewFlagSet(args[0], pflag.ContinueOnError)
 	o, err := parseWith(fs, args[1:], cfg)

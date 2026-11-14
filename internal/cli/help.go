@@ -7,7 +7,7 @@ import (
 
 // writeHelp 输出 gowork 的帮助。选项部分手写而不是交给 pflag.FlagUsages：
 // 它会把布尔项写成 [=true|false]、用 Go 类型当占位符，也描述不了
-// 短选项别名、组合写法、索引短选项和 init 子命令。
+// 短选项别名、组合写法、索引短选项和用户可见的 init 子命令（complete 仅供补全，不列出）。
 // 左列保持纯 ASCII，才能用 len 对齐；中文说明放在右列，不参与列宽计算。
 func writeHelp(w io.Writer) {
 	fmt.Fprint(w, `用法: gowork [选项] [项目]
@@ -31,7 +31,7 @@ func writeHelp(w io.Writer) {
 	})
 	fmt.Fprint(w, `
 只允许用一种方式指定一个项目。
-通过 work 调用时 init 或 complete 等子命令被当作项目名，这些子命令需直接运行 gowork。
+通过 shell 函数调用时 init / complete 等子命令被当作项目名，直接运行 gowork init 等才会生效。
 `)
 }
 

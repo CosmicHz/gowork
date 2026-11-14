@@ -106,7 +106,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   提示按“可能是笔误”给出正确写法；选项的值（`-p -12`、`-ni -12`）不参与判断。
 - `--recent N` 与 `-N`（1–9）等价；`Project` 仍用 `-N` 字符串表示索引，交给
   `project.Resolve` 处理，因此同名/同前缀提示不受影响。
-  `--project`、`--recent`、`-N` 都是目标选择器，同时出现、或再直接写项目名（位置参数）时报错；
+  `--project`、`--recent`、`-N` 都是项目选择器，同时出现、或再直接写项目名时报错；
   提示按“多写了”与“这次同时用了 X 和 Y”两类措辞分别给出。
 - pflag 默认 interspersed：`work my-app -n` 与 `work -n my-app` 等价，不需要额外的
   重排；未知选项会在原位置报错，而不是被吞掉。
@@ -118,16 +118,15 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
   `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
   bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
-- `--` 之后的参数都是位置参数；gowork 只接受一个位置参数，它的角色是目标选择器
-  “直接写项目名”。多写直接报错并列出多写的部分。
-  第一个位置参数是否来自 `--` 用 `fs.ArgsLenAtDash() == 0` 判断（值为 0 说明终止符后面
-  紧跟着第一个位置参数；`--workspace --` 里的 `--` 是值，pflag 不会记 dash）。
+- `--` 之后的参数都按项目名处理；gowork 只接受一个项目名。多写直接报错并列出多写的部分。
+  项目名是否来自 `--` 用 `fs.ArgsLenAtDash() == 0` 判断（值为 0 说明终止符后面
+  紧跟着项目名；`--workspace --` 里的 `--` 是值，pflag 不会记 dash）。
   `Run` 改用 `project.ResolveWithoutIndex`：仍做完整名/前缀匹配，但不把 `-N` 当索引，
   所以 `work -- -1` 是进入名为 `-1` 的项目。PowerShell 会在进入函数前丢掉 `--`，
   该写法只在直接调用二进制或 POSIX shell 中可用；pwsh 用 `./-1`。
 - `cli.optionCollisionWarnings` 汇总选项名与工作区目录同名的歧义
   （如 `-n`、`-p`、`--no-color`）。只对 `fs.Visit` 实际解析到的选项
-  提示；位置参数之后的选项也会算，`--` 之后的位置参数不算。`optionToken` /
+  提示；项目名之后的选项也会算，`--` 之后的不算。`optionToken` /
   `optionConsumesNext` 直接读 pflag 的 `Lookup` / `ShorthandLookup` 与 `NoOptDefVal`。
   `cwd-file`（shell 自动注入）与 `help` 不提示。
   提示按用户实际拼写的选项名比较目录名，消歧写法是 `work ./<选项名>`。
@@ -292,9 +291,9 @@ go test ./...
 ```
 
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
-- `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住位置参数后的选项：
-  位置参数之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
-  位置参数（项目名）与 `--project` / `--recent` / `-N` 的冲突；
+- `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住项目名后的选项：
+  项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
+  项目名与 `--project` / `--recent` / `-N` 的冲突；
   `TestParseRejectsMultipleProjects` 钉住“只能指定一个项目”，且 `-h` 优先于该校验。
 - `internal/shell/shell_test.go`：
   - 各 shell 名称、别名、大小写、错误参数；

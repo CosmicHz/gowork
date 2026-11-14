@@ -145,12 +145,12 @@ func TestRenderWarningsBelowDashboard(t *testing.T) {
 
 	warnings := []project.Warning{
 		{
-			Message: "前缀 'init' 匹配到多个项目，跳转到最短匹配：",
-			Details: []string{"init-app", "init-service"},
+			Message: "前缀 'my' 匹配到多个项目，跳转到最短匹配：",
+			Details: []string{"my-app", "my-service"},
 		},
 		{
-			Message: `"init" 同时是工作区里的目录名与 shell 集成子命令；通过 work 调用时按项目进入`,
-			Details: []string{"要明确进入目录请写 work ./init"},
+			Message: `"-n" 同时是工作区里的目录名与命令行选项；当前按选项解析`,
+			Details: []string{"要进入该目录请写 work ./-n"},
 		},
 	}
 	r.Render("/ws", nil, warnings)
@@ -172,7 +172,7 @@ func TestRenderWarningsBelowDashboard(t *testing.T) {
 	if n := strings.Count(got, "⚠"); n != len(warnings) {
 		t.Errorf("每条提示应各带一个 ⚠，得到 %d 个：\n%s", n, got)
 	}
-	if !strings.Contains(got, "init-service\n\n") {
+	if !strings.Contains(got, "my-service\n\n") {
 		t.Errorf("两条提示之间应空一行：\n%s", got)
 	}
 }
