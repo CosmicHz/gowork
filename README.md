@@ -18,7 +18,7 @@ PS C:\Projects\gowork> work awe
       时间        2026-10-17  星期六  16:17:18
       位置        C:\Projects\awesome-project
       项目        67 个项目
-      磁盘        114.0 GB 可用
+      可用空间    114.0 GB / 514.0 GB  (C:)
       Git         chore/important-feature  ·  5 项未提交
       节日        元旦🎉  还有 76 天  (放假 3 天)
 
@@ -290,7 +290,7 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `recent_limit` | `4` | 「最近活跃」列出的项目数，最小 1 |
 | `recent_name_width` | `35` | 「最近活跃」项目名截断宽度（显示列），最小 5 |
 | `disk_warn_gb` | `10` | 可用空间低于该值时标红；`0` 表示不标红 |
-| `show_disk` | `true` | 是否显示「磁盘」行 |
+| `show_disk` | `true` | 是否显示「可用空间」行 |
 | `show_git` | `true` | 是否显示「Git」行 |
 | `show_holiday` | `true` | 是否显示「节日」行 |
 | `show_recent` | `true` | 是否显示「最近活跃」 |
@@ -456,7 +456,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 | 时间 | 本地时间、中文星期、24 小时制 | — |
 | 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
 | 项目 | 工作区下的项目数 | — |
-| 磁盘 | 目标所在卷对**当前用户**可用的空间；低于 `disk_warn_gb`（配置项，默认 10 GB）显示为红色 | 整行不显示 |
+| 可用空间 | 目标所在卷的可用 / 总量；括号内为盘符或挂载点（根挂载点写作「根分区」）。可用低于 `disk_warn_gb`（配置项，默认 10 GB）显示为红色 | 整行不显示 |
 | Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain` 的非空行数） | 非仓库或无 git → 整行不显示 |
 | 节日 | 见下 | 显示 `数据获取失败⚠️` |
 | 最近活跃 | 按修改时间倒序前 `recent_limit`（配置项，默认 4） 个；名字按显示宽度截到 `recent_name_width`（配置项，默认 35，超出则留 3 列给 `...`） 列，后接 `MM-dd HH:mm` | 没有项目 → 整段不显示 |
@@ -539,7 +539,7 @@ gowork/
 └── .github/workflows/   CI 与发布
 ```
 
-平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；
+平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskUsage`，用构建标签隔开；
 其余包与平台无关，可在任意平台 `go test`。
 
 ## 开发
@@ -554,7 +554,7 @@ GOOS=windows GOARCH=amd64 go build -o bin/gowork.exe ./cmd/gowork
 GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 ./cmd/gowork
 ```
 
-平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskFreeGB`，用构建标签隔开；其余包与平台无关，
+平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskUsage`，用构建标签隔开；其余包与平台无关，
 所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、索引写法、宽度截断、
 节假日文案等纯逻辑，不必等到 Windows 上才能验。
 

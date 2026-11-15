@@ -11,6 +11,7 @@ import (
 	"gowork/internal/config"
 	"gowork/internal/console"
 	"gowork/internal/project"
+	"gowork/internal/sysinfo"
 )
 
 func testRenderer(out *bytes.Buffer) *Renderer {
@@ -235,6 +236,25 @@ func TestRenderTagsOutputSources(t *testing.T) {
 	}
 	if seen[console.SourceRaw] {
 		t.Error("自行上色的行应走 SourceRaw，不该进入 transform")
+	}
+}
+
+// TestDiskText 钉住可用空间的文案：根挂载点显示为「根分区」，无卷标识时不加括号。
+func TestDiskText(t *testing.T) {
+	cases := []struct {
+		desc string
+		d    sysinfo.DiskSpace
+		want string
+	}{
+		{"根挂载点", sysinfo.DiskSpace{FreeGB: 12.5, TotalGB: 50, Volume: "/"}, "12.5 GB / 50.0 GB  (根分区)"},
+		{"普通挂载点", sysinfo.DiskSpace{FreeGB: 12.5, TotalGB: 50, Volume: "/home"}, "12.5 GB / 50.0 GB  (/home)"},
+		{"盘符", sysinfo.DiskSpace{FreeGB: 12.5, TotalGB: 50, Volume: "C:"}, "12.5 GB / 50.0 GB  (C:)"},
+		{"无卷标识", sysinfo.DiskSpace{FreeGB: 12.5, TotalGB: 50}, "12.5 GB / 50.0 GB"},
+	}
+	for _, c := range cases {
+		if got := diskText(c.d); got != c.want {
+			t.Errorf("%s：diskText = %q，想要 %q", c.desc, got, c.want)
+		}
 	}
 }
 

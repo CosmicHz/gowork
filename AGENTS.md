@@ -49,7 +49,7 @@ internal/
   holiday/             接口请求、事件整理与挑选、缓存、节日图标、"节日"行文案
   clone/               地址识别、仓库名推断与校验、git clone 直连控制台
   shell/               Init（switch）、sh / fish / powershell / zsh 模板（zsh 含补全）
-  sysinfo/             ColorEnabled、EnableVT、DiskFreeGB（跨平台）
+  sysinfo/             ColorEnabled、EnableVT、DiskUsage（跨平台）
 install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提示；不改用户环境
 install_test.sh            安装脚本的配置命令识别、替换与去重测试
 .github/workflows/     ci.yml（三平台测试 + shell 预检）、release.yml（v* 标签发布）
@@ -61,8 +61,11 @@ install_test.sh            安装脚本的配置命令识别、替换与去重�
 | --- | --- |
 | `console_windows.go` | `EnableVT`（VT + UTF-8 代码页） |
 | `console_posix.go` | `EnableVT` 空实现 |
-| `disk_windows.go` | `DiskFreeGB`（`GetDiskFreeSpaceEx`） |
-| `disk_posix.go` | `DiskFreeGB`（`statfs` 的 `Bavail * Bsize`） |
+| `disk_windows.go` | `DiskUsage`（`GetDiskFreeSpaceEx` + 盘符） |
+| `disk_posix.go` | `DiskUsage`（`statfs` 的 `Bavail` / `Blocks` + 挂载点） |
+| `mount_linux.go` | 从 `/proc/self/mounts` 取最长挂载点 |
+| `mount_darwin.go` | 用 `Statfs_t.Mntonname` 作为挂载点 |
+| `mount_other.go` | 未适配 POSIX 平台的空挂载点 |
 
 ## 行为细节
 
@@ -182,7 +185,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   清屏、窗口标题仅在 tty 下执行。
 - 进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`；放不下就另起一行；
   回工作区根目录不加。
-- 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、磁盘（可用低于
+- 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、可用空间（`可用 / 总量`
+  加卷标识，如 `114.0 GB / 514.0 GB  (C:)`；根挂载点写作 `(根分区)`；可用低于
   `disk_warn_gb`（默认 10 GB）变红，取不到整行不显示）、Git（非仓库整行不显示）、
   节日、最近活跃（默认前 `recent_limit` 个，名字按显示宽度截到
   `recent_name_width` 列，后接 `MM-dd HH:mm`）。

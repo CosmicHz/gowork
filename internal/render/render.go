@@ -172,12 +172,12 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), console.White)
 
 	if r.showDisk {
-		if free, ok := sysinfo.DiskFreeGB(target); ok {
+		if d, ok := sysinfo.DiskUsage(target); ok {
 			color := console.White
-			if free < r.diskWarnGB {
+			if d.FreeGB < r.diskWarnGB {
 				color = console.Red
 			}
-			r.row("磁盘", fmt.Sprintf("%.1f GB 可用", free), color)
+			r.row("可用空间", diskText(d), color)
 		}
 	}
 
@@ -201,6 +201,19 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 
 	r.printWarnings(warnings)
 	r.println(console.SourceDefault)
+}
+
+// diskText 拼出「可用 / 总量（卷）」；根挂载点用「根分区」代替裸 /。
+func diskText(d sysinfo.DiskSpace) string {
+	volume := d.Volume
+	if volume == "/" {
+		volume = "根分区"
+	}
+	value := fmt.Sprintf("%.1f GB / %.1f GB", d.FreeGB, d.TotalGB)
+	if volume != "" {
+		value += "  (" + volume + ")"
+	}
+	return value
 }
 
 // printWarnings 在仪表盘下方逐组输出提示。每组首行带 ⚠，明细缩进，
