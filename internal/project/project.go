@@ -48,12 +48,23 @@ func List(root string) []Project {
 		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		// 用 Stat 而不是 DirEntry.IsDir，这样指向目录的符号链接也算项目。
-		info, err := os.Stat(filepath.Join(root, e.Name()))
-		if err != nil || !info.IsDir() {
-			continue
+		// 真正的目录直接用 DirEntry 自带的元数据（Windows 上不额外发起系统调用）；
+		// 其余类型（文件、符号链接、junction）才 Stat，这样指向目录的链接也算项目。
+		var mod time.Time
+		if e.IsDir() {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			mod = info.ModTime()
+		} else {
+			info, err := os.Stat(filepath.Join(root, e.Name()))
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			mod = info.ModTime()
 		}
-		projects = append(projects, Project{Name: e.Name(), Mod: info.ModTime()})
+		projects = append(projects, Project{Name: e.Name(), Mod: mod})
 	}
 
 	sort.SliceStable(projects, func(i, j int) bool {
@@ -198,23 +209,31 @@ func GitInfo(target string) (string, int, bool) {
 	if _, err := os.Stat(filepath.Join(target, ".git")); err != nil {
 		return "", 0, false
 	}
-	if _, err := exec.LookPath("git"); err != nil {
-		return "", 0, false
-	}
-
-	out, err := exec.Command("git", "-C", target, "branch", "--show-current").Output()
+	// LookPath 会逐个扫描 PATH，所以只做一次；
+	// 之后用绝对路径调用，exec.Command 才不会自己再解析一遍。
+	git, err := exec.LookPath("git")
 	if err != nil {
 		return "", 0, false
 	}
-	branch := strings.TrimSpace(string(out))
-	if branch == "" {
-		branch = "detached"
+
+	// 一条命令同时拿到分支与变更
+	out, err := exec.Command(git, "-C", target, "status", "--porcelain=v2", "--branch").Output()
+	if err != nil {
+		return "", 0, false
 	}
 
-	status, _ := exec.Command("git", "-C", target, "status", "--porcelain").Output()
+	branch := "detached"
 	changes := 0
-	for _, line := range strings.Split(string(status), "\n") {
-		if strings.TrimSpace(line) != "" {
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "# branch.head "):
+			// 分离头指针时这里就是 "(detached)"，保持原来的显示。
+			if name := strings.TrimSpace(strings.TrimPrefix(line, "# branch.head ")); name != "" && name != "(detached)" {
+				branch = name
+			}
+		case line == "" || strings.HasPrefix(line, "#"):
+			// 头部元信息（branch.oid、branch.upstream 等）不算变更。
+		default:
 			changes++
 		}
 	}

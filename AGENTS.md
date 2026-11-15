@@ -111,8 +111,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 项目扫描与匹配
 
-- `project.List` 读工作区一级目录：跳过 `.` 开头，文件跳过；判断用 `os.Stat` 而不是
-  `DirEntry.IsDir`，因此符号链接、junction 指向目录时都算项目。
+- `project.List` 读工作区一级目录：跳过 `.` 开头，文件跳过。真正的目录直接用
+  `DirEntry.IsDir` / `DirEntry.Info`（Windows 上不额外发起系统调用）；其余类型才 `os.Stat`，
+  所以符号链接、junction 指向目录时仍然算项目。
 - 按 `ModTime` 倒序；`-N` 取第 N 个（1 起），越界报 `有效范围: 1-N`。
 - `project.Resolve`：完整名 → 前缀（大小写不敏感）→ 唯一命中跳转；多个命中取**名字最短**，
   并列时按字典序。返回 `project.Warning` 组（首行 Message + 缩进 Details）：前缀多命中、
@@ -122,7 +123,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   不做前缀匹配，所以 `work ./-114` 不会匹配 `-114514`。用 `./-N` 明确指定时不再提示。
 - 空项目名表示回工作区根目录。
 - `project.GitInfo`：`.git` 存在（文件或目录都算，兼容 worktree）且 PATH 有 git，才显示分支与
-  `git status --porcelain` 的非空行数；空分支名显示 `detached`。
+  未提交条目数。`LookPath` 只做一次，之后用绝对路径调用；分支与变更由同一条
+  `git status --porcelain=v2 --branch` 给出（`# branch.head` 是分支名，分离头指针时显示
+  `detached`，其余 `#` 开头的是元信息，不计入变更数）。
 
 ### 命令行参数
 
@@ -414,6 +417,11 @@ go test ./...
    `-1..-9`。另外 `compdef` 只有加载 `compinit` 后才存在：不要自动替用户跑 compinit，
    也不要在未加载时打印错误，否则会污染 shell 启动。补全候选来自
    `gowork complete projects`，失败时靠 `2>/dev/null` 静默。
+18. **`exec.Command` 对不带路径的文件名会再做一次 `LookPath`**。本机 PATH 有 47 项时
+   一次 `LookPath` 约 0.28 s；旧版 `GitInfo` 先显式查一次、再让两次 `exec.Command`
+   各查一次，光路径解析就花了近 1 s。现在只 `LookPath` 一次并传绝对路径，分支与变更
+   也合并成一条 `git status --porcelain=v2 --branch`。新增子进程调用时同样要先拿到
+   绝对路径，不要反复用裸命令名。
 
 ## 改动时的连带点
 
