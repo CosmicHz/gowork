@@ -9,7 +9,7 @@
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
 - 只有三个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）
   与 `github.com/spf13/pflag`（命令行解析）。
-- 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`ansi`、`cli`、`config`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
+- 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`cli`、`config`、`console`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
 - shell 侧只有一层壳：`gowork init <shell>` 打印函数代码（zsh 还带补全），用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
 
@@ -22,14 +22,14 @@
 1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`；PowerShell 只翻译
    `-Project` / `-IndentSize` / `-Workspace`，其余参数原样透传。
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
-3. `cli.Main`：`sysinfo.EnableVT()` → `runSubcommand` 按 `os.Args[1]` 处理
-   `init` / `complete` 并直接返回 → `config.Load()` →
+3. `cli.Main`：`console.New()`（绑定 stdout/stderr 并开启 VT）→ `runSubcommand` 按
+   `os.Args[1]` 处理 `init` / `complete` 并直接返回 → `config.Load()` →
    `parseWith`（内部先 `checkIndexArgs`，再 `pflag.Parse`）。
-4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New` → `project.List` →
-   若参数像仓库地址则 `clone.Project` 并重扫项目，否则 `project.Resolve`。
+4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New(opts, con)` → `project.List` →
+   若参数像仓库地址则 `clone.Project(..., con)` 并重扫项目，否则 `project.Resolve`。
 5. `render.Renderer.Render`：清屏、窗口标题、logo、仪表盘、格言，最后是提示。
 6. 成功才把目标目录写入 `--cwd-file`；退出码 0 时 shell 函数读取并切目录。
-7. 失败统一走 `sysinfo.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
+7. 失败统一走 `console.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
    **不切换目录**。
 
 注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` / `work complete`
@@ -41,15 +41,15 @@
 ```text
 cmd/gowork/            入口，只把 os.Args 交给 internal/cli
 internal/
-  ansi/                ANSI 前景色常量与主色调色板
   cli/                 参数解析、索引短选项校验（checkIndexArgs）、编排（Main / Run）、complete 子命令
   config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
+  console/             控制台唯一出口：stdout/stderr、ANSI 颜色与调色板、清屏、窗口标题、失败退出
   project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
-  render/              仪表盘渲染、ANSI 使用、row / rule / printRecent、宽度计算与截断
+  render/              仪表盘布局、row / rule / printRecent、宽度计算与截断
   holiday/             接口请求、事件整理与挑选、缓存、节日图标、"节日"行文案
   clone/               地址识别、仓库名推断与校验、git clone 直连控制台
   shell/               Init（switch）、sh / fish / powershell / zsh 模板（zsh 含补全）
-  sysinfo/             ColorEnabled、Fail、TerminalWidth（跨平台）
+  sysinfo/             ColorEnabled、EnableVT、DiskFreeGB（跨平台）
 install.sh / install.ps1   构建并投放二进制，打印 PATH 与 init 提示；不改用户环境
 install_test.sh            安装脚本的配置命令识别、替换与去重测试
 .github/workflows/     ci.yml（三平台测试 + shell 预检）、release.yml（v* 标签发布）
@@ -65,6 +65,31 @@ install_test.sh            安装脚本的配置命令识别、替换与去重�
 | `disk_posix.go` | `DiskFreeGB`（`statfs` 的 `Bavail * Bsize`） |
 
 ## 行为细节
+
+### 控制台输出
+
+所有控制台通信都走 `internal/console`：仪表盘、帮助、`init` / `complete` 的输出、错误
+与 `git clone` 的终端接管都必须经 `Console`，不要在别处直接写 `os.Stdout` / `os.Stderr`。
+`Console` 持有两个流与各自的 tty 判定、颜色开关、宽度与主色，并通过
+`SetTransform(func(Source, string) string)` 在写出前加工文本。transform 是通用钩子，
+样式、转义、过滤或记录都可以放在这里；内置实现目前只做整段着色，分工按“整段是否同色”
+划分：`error` → 红（按 stderr 的 tty）、`banner` / `greeting` / `recent` / `clone` → 主色、
+`project` → 白、`rule` → 暗灰、`quote` → 绿、`warning` → 黄；纯空白行跳过。
+`SourceRaw` 用于两类文本：强制不能改动的 `init` / `complete` 输出，以及调用方已经用
+`Paint` 自行上色的混色行（明细行、最近活跃条目、克隆地址 / 目标行）。`write` 见到它就
+直接写出、不调用 transform。自行上色应尽量避免：能拆成整段同色的部分都交给 transform，
+只有同一行里确实需要多种颜色时才用 `Paint` + `SourceRaw`。
+`SourceDefault` 用于没有语义归属、但也不需要强制纯文本的输出（目前只有结构空行），
+transform 照常执行；它不替代任何已有语义来源，也应尽量少用。`help` 当前不做处理。
+`SetTransform` 可以整体替换内置实现，传 `nil` 即关闭加工。
+`Source` 按语义分得比模块更细，`Print` / `Println` / `Writer` 每次调用都显式带上来源，
+因此可以在同一段里临时换标签：`default`、`banner`、`project`、`greeting`、`recent`、
+`quote`、`rule`、`warning`、`clone`、`help`、`raw`、`error`。清屏与窗口标题等控制
+序列直接写出，不经过 transform。`Attach` 把 git 子进程直接接到控制台。
+终端配置支持热更新：`SetNoColor` / `SetTransform` / `SetAccent` / `SetWidth` 可在同一个
+实例上随时改；`Refresh` 重新探测 tty 与宽度（`Render` 每次输出前都会调用一次），
+所以窗口大小变化后不需要重建 Console。`sysinfo.ColorEnabled` 仍是唯一的颜色判定。
+测试用 `console.NewWith` 注入 `bytes.Buffer`，不要依赖真实终端。
 
 ### 工作区与配置
 
@@ -146,8 +171,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 
 ### 仪表盘
 
-- `render.New`：`tty = term.IsTerminal(stdout)`；颜色由 `sysinfo.ColorEnabled` 判定
-  （tty && 未传 `--no-color` && `NO_COLOR` 为空）；accent 从青/绿/黄/紫随机选。
+- `render.New(o, con)`：宽度、主色与颜色能力都来自 `console.Console`（tty && 未传
+  `--no-color` && `NO_COLOR` 为空）；accent 在构造 Console 时从青/绿/黄/紫随机选。
+  renderer 不缓存宽度，每次 `Render` 先 `con.Refresh()` 再按当前宽度排版。
   默认渲染配置由 `render.DefaultOptions()` 提供，数值默认直接引用 `config.Default*` /
   `config.Min*`，不要再在 render 里复制一份。调用方从 `DefaultOptions()` 起步再覆盖字段；
   `Options` 的 `Show*` / `ClearScreen` 是正向 bool，零值表示关闭，不能拿 `Options{}` 当默认。
@@ -321,6 +347,13 @@ go test ./...
   - `TestListFollowsJunction`（仅 Windows）固定用 `mklink /J`，
     保证符号链接用例因权限跳过时，「链接指向目录算项目」仍然有覆盖。
 - `internal/sysinfo/sysinfo_test.go` 的 `TestColorEnabled` 钉住颜色开关的三个条件。
+- `internal/console/console_test.go`：`Paint` 的三种颜色开关、带来源标识的 `SetTransform`
+  对 `Print` / `Println` / `Writer` 的统一加工、`TestRawSourceBypassesTransform` 钉住
+  `SourceRaw` 连自定义 transform 都不调用、默认 transform 按来源给整段同色的输出上色，
+  以及清屏 / 窗口标题只在 tty 下写出且绕过 transform。
+  `internal/render/render_test.go` 的 `TestRenderTagsOutputSources` 钉住仪表盘各段
+  （default / banner / project / rule / greeting / recent / quote / warning / clone）
+  把真实来源交给 transform，自行上色的 `SourceRaw` 行不进入 transform。
 - `internal/cli/cli_test.go` 覆盖索引短选项与 `checkIndexArgs`：`-1`…`-9` 可用、
   `-1=5` 报错、`-1 -2` 冲突、`-10`/`-12` 提示改用 `--recent`、`-p -12` 不被误判。
 - 跳过项取决于环境：缺 zsh / dash / fish 会跳过对应的语法检查；Windows 上建不了
@@ -418,8 +451,3 @@ go test ./...
   `-Workspace`（含无歧义缩写），其余原生参数（`--recent`、`--no-color`、短选项等）靠透传，
   已经可用。目标是再给所有原生参数提供 pwsh 风格别名（如 `-Recent` / `-NoColor`），
   并与原生参数一一对应；实现时同步模板、测试与 README。
-- **颜色开关的参数穿透（待改进）**：`sysinfo.ColorEnabled(isTTY, noColor)` 是唯一判定，仪表盘与
-  `sysinfo.Fail` 共用，tty 按各自的流判断。但 `--no-color` 只能从 `cli` 传进 `Fail`，为此多了一个
-  `bool` 参数，目前只有 `cli.Main -> sysinfo.Fail` 一层，先接受。若错误输出还要别的配置，改为传
-  `Options` 或收一个统一配置，不要继续加布尔参数；也不要改用包级变量（与 `Options` 双轨）
-  或 `os.Setenv("NO_COLOR", ...)`（会污染 `git clone` 等子进程）。

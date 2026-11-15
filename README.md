@@ -525,15 +525,15 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 gowork/
 ├── cmd/gowork/          入口，只把 os.Args 交给 internal/cli
 ├── internal/
-│   ├── ansi/            ANSI 前景色常量与主色调色板
 │   ├── cli/             参数解析、编排与退出码
 │   ├── config/          工作区解析、配置文件与缓存目录
+│   ├── console/         控制台唯一出口：输出、ANSI 颜色与调色板、清屏、窗口标题、失败退出
 │   ├── project/         扫描工作区、最近项目索引、前缀匹配、git 状态
 │   ├── render/          仪表盘渲染、宽度对齐、克隆提示
 │   ├── holiday/         节假日查询、缓存与「节日」行文案
 │   ├── clone/           仓库地址识别、仓库名推断、git clone
 │   ├── shell/           gowork init 的 shell 集成模板（sh / fish / powershell / zsh）
-│   └── sysinfo/         终端宽度、颜色开关、失败输出、VT 与磁盘空间
+│   └── sysinfo/         颜色开关、VT 与磁盘空间
 ├── install.sh           macOS / Linux 安装脚本：构建并放到 PATH 目录
 ├── install.ps1          Windows 安装脚本，同上
 └── .github/workflows/   CI 与发布

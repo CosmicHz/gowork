@@ -3,18 +3,14 @@ package render
 
 import (
 	"fmt"
-	"io"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 
-	"golang.org/x/term"
-
-	"gowork/internal/ansi"
 	"gowork/internal/config"
+	"gowork/internal/console"
 	"gowork/internal/holiday"
 	"gowork/internal/project"
 	"gowork/internal/sysinfo"
@@ -47,11 +43,10 @@ var quotes = []string{
 	"代码是写给人看的，顺便让机器运行。",
 }
 
-// Options 是渲染所需的配置。
+// Options 是渲染所需的配置。颜色与终端能力由 console.Console 决定。
 type Options struct {
 	Indent          int
 	Workspace       string
-	NoColor         bool
 	RecentLimit     int
 	RecentNameWidth int
 	DiskWarnGB      float64
@@ -79,14 +74,10 @@ func DefaultOptions() Options {
 	}
 }
 
-// Renderer 输出仪表盘；清屏、窗口标题与颜色只在真实终端下启用。
+// Renderer 输出仪表盘；所有控制台通信都经 console.Console。
 type Renderer struct {
-	out             io.Writer
+	con             *console.Console
 	indent          string
-	width           int
-	tty             bool
-	color           bool
-	accent          string
 	workspace       string
 	recentLimit     int
 	recentNameWidth int
@@ -99,8 +90,8 @@ type Renderer struct {
 	quotes          []string
 }
 
-// New 按终端能力与配置决定宽度、颜色、布局与主色。
-func New(o Options) *Renderer {
+// New 用给定的控制台与配置构造渲染器；宽度、颜色与主色都来自 con。
+func New(o Options, con *console.Console) *Renderer {
 	if o.RecentLimit < 1 {
 		o.RecentLimit = config.DefaultRecentLimit
 	}
@@ -114,10 +105,9 @@ func New(o Options) *Renderer {
 		o.Quotes = quotes
 	}
 
-	r := &Renderer{
-		out:             os.Stdout,
+	return &Renderer{
+		con:             con,
 		indent:          strings.Repeat(" ", o.Indent),
-		width:           sysinfo.TerminalWidth(),
 		workspace:       o.Workspace,
 		recentLimit:     o.RecentLimit,
 		recentNameWidth: o.RecentNameWidth,
@@ -129,15 +119,14 @@ func New(o Options) *Renderer {
 		clearScreenOn:   o.ClearScreen,
 		quotes:          o.Quotes,
 	}
-	r.tty = term.IsTerminal(int(os.Stdout.Fd()))
-	r.color = sysinfo.ColorEnabled(r.tty, o.NoColor)
-	r.accent = ansi.Palette[rand.IntN(len(ansi.Palette))]
-	return r
 }
 
 // Render 输出一次完整的仪表盘。
 func (r *Renderer) Render(target string, projects []project.Project, warnings []project.Warning) {
 	now := time.Now()
+
+	// 每次输出前重新探测终端，窗口大小变化后无需重建 Console。
+	r.con.Refresh()
 
 	// 清屏后再输出
 	if r.clearScreenOn {
@@ -152,37 +141,41 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 		name = "on " + filepath.Base(target)
 	}
 
-	r.println()
+	r.println(console.SourceDefault)
 	art := strings.Split(bannerArt, "\n")
 	placed := false
 	for i, line := range art {
-		entry := r.indent + r.paint(r.accent, line)
+		logo := r.indent + line
 		if name != "" && i == len(art)-2 {
 			need := len(r.indent) + displayWidth(line) + bannerSuffixGap + displayWidth(name)
-			if need <= r.width {
-				entry += strings.Repeat(" ", bannerSuffixGap) + r.paint(ansi.White, name)
+			if need <= r.con.Width() {
+				// logo 与项目名后缀是同一条线上的两段样式，分开写出，各自由来源着色。
+				r.con.Print(console.SourceBanner, logo)
+				r.con.Print(console.SourceOnProject, strings.Repeat(" ", bannerSuffixGap)+name)
+				r.con.Println(console.SourceBanner)
 				placed = true
+				continue
 			}
 		}
-		r.println(entry)
+		r.println(console.SourceBanner, logo)
 	}
 	if name != "" && !placed {
-		r.println(r.indent + r.paint(ansi.White, name))
+		r.println(console.SourceOnProject, r.indent+name)
 	}
 	r.rule()
 
-	r.println(r.indent + r.paint(r.accent, greeting(now)))
-	r.println()
+	r.println(console.SourceGreeting, r.indent+greeting(now))
+	r.println(console.SourceDefault)
 
-	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"), ansi.White)
-	r.row("位置", target, ansi.White)
-	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), ansi.White)
+	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"), console.White)
+	r.row("位置", target, console.White)
+	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), console.White)
 
 	if r.showDisk {
 		if free, ok := sysinfo.DiskFreeGB(target); ok {
-			color := ansi.White
+			color := console.White
 			if free < r.diskWarnGB {
-				color = ansi.Red
+				color = console.Red
 			}
 			r.row("磁盘", fmt.Sprintf("%.1f GB 可用", free), color)
 		}
@@ -190,34 +183,34 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 
 	if r.showGit {
 		if branch, changes, ok := project.GitInfo(target); ok {
-			r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.accent)
+			r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.con.Accent())
 		}
 	}
 
 	if r.showHoliday {
-		r.row("节日", holiday.Line(holiday.Next(now), now), ansi.White)
+		r.row("节日", holiday.Line(holiday.Next(now), now), console.White)
 	}
 
 	if r.showRecent {
 		r.printRecent(projects)
 	}
 
-	r.println()
+	r.println(console.SourceDefault)
 	r.rule()
-	r.println(r.indent + "  " + r.paint(ansi.Green, r.quotes[rand.IntN(len(r.quotes))]))
+	r.println(console.SourceQuote, r.indent+"  "+r.quotes[rand.IntN(len(r.quotes))])
 
 	r.printWarnings(warnings)
-	r.println()
+	r.println(console.SourceDefault)
 }
 
 // printWarnings 在仪表盘下方逐组输出提示。每组首行带 ⚠，明细缩进，
 // 组与组之间空一行，这样前缀歧义与名称冲突同时出现时也不会混在一起。
 func (r *Renderer) printWarnings(warnings []project.Warning) {
 	for _, w := range warnings {
-		r.println()
-		r.println(r.paint(ansi.Yellow, r.indent+"  ⚠ "+w.Message))
+		r.println(console.SourceDefault)
+		r.println(console.SourceWarning, r.indent+"  ⚠ "+w.Message)
 		for _, d := range w.Details {
-			r.println(r.paint(ansi.Yellow, r.indent+"     "+d))
+			r.println(console.SourceWarning, r.indent+"     "+d)
 		}
 	}
 }
@@ -227,46 +220,42 @@ func (r *Renderer) CloneNotice(url, dest string) {
 	if r.clearScreenOn {
 		r.clearScreen()
 	}
-	r.println()
-	r.println(r.indent + r.paint(r.accent, "正在克隆仓库"))
-	r.row("地址", url, ansi.White)
-	r.row("目标", dest, ansi.White)
-	r.println()
+	r.println(console.SourceDefault)
+	r.println(console.SourceClone, r.indent+"正在克隆仓库")
+	r.row("地址", url, console.White)
+	r.row("目标", dest, console.White)
+	r.println(console.SourceDefault)
 }
 
 // clearScreen 清屏并清掉回滚缓冲；输出被重定向时不做任何事，免得往文件里塞转义序列。
 func (r *Renderer) clearScreen() {
-	if !r.tty {
-		return
-	}
-	fmt.Fprint(r.out, "\x1b[H\x1b[2J\x1b[3J")
+	r.con.ClearScreen()
 }
 
 // setTitle 设置终端窗口标题。
 func (r *Renderer) setTitle(title string) {
-	if !r.tty {
-		return
-	}
-	fmt.Fprintf(r.out, "\x1b]0;%s\x07", title)
+	r.con.SetTitle(title)
 }
 
 // rule 画分隔线。只限上界：超宽终端下拉满整行会很难看；下界不设，
 func (r *Renderer) rule() {
-	n := max(0, min(r.width, maxRuleWidth)-len(r.indent)*2)
-	r.println(r.indent + r.paint(ansi.DarkGray, strings.Repeat("─", n)))
+	n := max(0, min(r.con.Width(), maxRuleWidth)-len(r.indent)*2)
+	r.println(console.SourceRule, r.indent+strings.Repeat("─", n))
 }
 
 // row 输出一行「标签 + 值」，标签按终端视觉宽度对齐到 rowLabelWidth。
+// 行内混有多种颜色，由 Paint 精细调控，因此按 SourceRaw 直接写出、不经过 transform。
 func (r *Renderer) row(label, value, valueColor string) {
 	pad := rowLabelWidth - displayWidth(label)
 	if pad < 0 {
 		pad = 0
 	}
-	r.println(r.indent +
-		r.paint(r.accent, "   ") +
-		r.paint(ansi.DarkGray, label) +
-		strings.Repeat(" ", pad) +
-		r.paint(valueColor, value))
+	r.println(console.SourceRaw,
+		r.indent+
+			r.con.Paint(r.con.Accent(), "   ")+
+			r.con.Paint(console.DarkGray, label)+
+			strings.Repeat(" ", pad)+
+			r.con.Paint(valueColor, value))
 }
 
 func (r *Renderer) printRecent(projects []project.Project) {
@@ -278,27 +267,21 @@ func (r *Renderer) printRecent(projects []project.Project) {
 		return
 	}
 
-	r.println()
-	r.println(r.indent + r.paint(r.accent, "  最近活跃"))
+	r.println(console.SourceDefault)
+	r.println(console.SourceRecent, r.indent+"  最近活跃")
 	for i, p := range recent {
 		name := truncateWidth(p.Name, r.recentNameWidth)
 		pad := r.recentNameWidth - displayWidth(name) + 1
-		r.println(r.indent +
-			r.paint(ansi.DarkGray, fmt.Sprintf("%2d  ", i+1)) +
-			name + strings.Repeat(" ", pad) +
-			r.paint(ansi.DarkGray, p.Mod.Format("01-02 15:04")))
+		r.println(console.SourceRaw,
+			r.indent+
+				r.con.Paint(console.DarkGray, fmt.Sprintf("%2d  ", i+1))+
+				name+strings.Repeat(" ", pad)+
+				r.con.Paint(console.DarkGray, p.Mod.Format("01-02 15:04")))
 	}
 }
 
-func (r *Renderer) println(parts ...string) {
-	fmt.Fprintln(r.out, strings.Join(parts, ""))
-}
-
-func (r *Renderer) paint(color, s string) string {
-	if !r.color {
-		return s
-	}
-	return color + s + ansi.Reset
+func (r *Renderer) println(source console.Source, parts ...string) {
+	r.con.Println(source, parts...)
 }
 
 func greeting(now time.Time) string {

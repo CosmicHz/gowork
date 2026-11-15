@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"gowork/internal/console"
 )
 
 func mkdirs(t *testing.T, root string, names ...string) {
@@ -117,7 +120,8 @@ func TestRunSubcommand(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
 			var out bytes.Buffer
-			if handled, _ := runSubcommand(c.args, &out); handled != c.handled {
+			con := console.NewWith(&out, io.Discard, false, false)
+			if handled, _ := runSubcommand(c.args, con); handled != c.handled {
 				t.Errorf("runSubcommand(%v) handled = %v, 想要 %v", c.args, handled, c.handled)
 			}
 		})

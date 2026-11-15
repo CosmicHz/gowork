@@ -1,6 +1,7 @@
-// Package ansi 收录仪表盘与错误输出共用的 ANSI 前景色。
-package ansi
+package console
 
+// 仪表盘、错误输出与提示共用的 ANSI 前景色。颜色是否真正生效由 Console 的
+// tty 判定与 noColor 开关决定，这里只提供转义序列。
 const (
 	Reset    = "\x1b[0m"
 	DarkGray = "\x1b[90m"

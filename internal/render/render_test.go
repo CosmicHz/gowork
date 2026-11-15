@@ -2,20 +2,21 @@ package render
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"gowork/internal/config"
+	"gowork/internal/console"
 	"gowork/internal/project"
 )
 
 func testRenderer(out *bytes.Buffer) *Renderer {
 	return &Renderer{
-		out:             out,
+		con:             console.NewWith(out, io.Discard, false, false),
 		indent:          "   ",
-		width:           80,
 		workspace:       "/ws",
 		recentLimit:     4,
 		recentNameWidth: 35,
@@ -72,7 +73,6 @@ func TestNewAppliesConfigOptions(t *testing.T) {
 	o := Options{
 		Indent:          4,
 		Workspace:       "/ws",
-		NoColor:         true,
 		RecentLimit:     2,
 		RecentNameWidth: 10,
 		DiskWarnGB:      5,
@@ -83,7 +83,7 @@ func TestNewAppliesConfigOptions(t *testing.T) {
 		ClearScreen:     false,
 		Quotes:          []string{"甲"},
 	}
-	r := New(o)
+	r := New(o, console.NewWith(io.Discard, io.Discard, false, false))
 	if r.indent != "    " || r.workspace != "/ws" {
 		t.Errorf("基础字段不对：indent=%q workspace=%q", r.indent, r.workspace)
 	}
@@ -112,7 +112,7 @@ func TestDefaultOptions(t *testing.T) {
 }
 
 func TestNewDefaultsOptionalFeatures(t *testing.T) {
-	r := New(DefaultOptions())
+	r := New(DefaultOptions(), console.NewWith(io.Discard, io.Discard, false, false))
 	if !r.showDisk || !r.showGit || !r.showHoliday || !r.showRecent {
 		t.Errorf("默认配置应显示所有行：%+v", r)
 	}
@@ -174,6 +174,67 @@ func TestRenderWarningsBelowDashboard(t *testing.T) {
 	}
 	if !strings.Contains(got, "my-service\n\n") {
 		t.Errorf("两条提示之间应空一行：\n%s", got)
+	}
+}
+
+func TestRenderUsesLiveConsoleWidth(t *testing.T) {
+	out := &bytes.Buffer{}
+	r := testRenderer(out)
+	r.showDisk = false
+	r.showGit = false
+	r.showHoliday = false
+	r.showRecent = false
+
+	r.con.SetWidth(40)
+	r.Render("/ws", nil, nil)
+	if got := out.String(); !strings.Contains(got, strings.Repeat("─", 34)) {
+		t.Errorf("宽度 40 时应画 34 列分隔线：\n%s", got)
+	}
+
+	out.Reset()
+	r.con.SetWidth(60)
+	r.Render("/ws", nil, nil)
+	if got := out.String(); !strings.Contains(got, strings.Repeat("─", 54)) {
+		t.Errorf("宽度热更新为 60 后应画 54 列分隔线：\n%s", got)
+	}
+}
+
+// TestRenderTagsOutputSources 确认仪表盘各段在写出前把真实来源交给 transform。
+func TestRenderTagsOutputSources(t *testing.T) {
+	out := &bytes.Buffer{}
+	r := testRenderer(out)
+	r.showDisk = false
+	r.showGit = false
+	r.showHoliday = false
+
+	seen := map[console.Source]bool{}
+	r.con.SetTransform(func(source console.Source, s string) string {
+		seen[source] = true
+		return s
+	})
+
+	projects := []project.Project{{Name: "alpha", Mod: time.Now()}}
+	r.Render("/ws/alpha", projects, []project.Warning{{Message: "注意", Details: []string{"细节"}}})
+	r.CloneNotice("https://example.com/repo.git", "/ws/repo")
+
+	want := []console.Source{
+		console.SourceBanner,
+		console.SourceOnProject,
+		console.SourceRule,
+		console.SourceGreeting,
+		console.SourceRecent,
+		console.SourceQuote,
+		console.SourceWarning,
+		console.SourceClone,
+		console.SourceDefault,
+	}
+	for _, source := range want {
+		if !seen[source] {
+			t.Errorf("transform 没收到来源 %q，实际收到 %v", source, seen)
+		}
+	}
+	if seen[console.SourceRaw] {
+		t.Error("自行上色的行应走 SourceRaw，不该进入 transform")
 	}
 }
 

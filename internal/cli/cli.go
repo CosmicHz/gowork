@@ -4,7 +4,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -13,10 +12,10 @@ import (
 
 	"gowork/internal/clone"
 	"gowork/internal/config"
+	"gowork/internal/console"
 	"gowork/internal/project"
 	"gowork/internal/render"
 	"gowork/internal/shell"
-	"gowork/internal/sysinfo"
 )
 
 // Options 是命令行解析结果 + 配置文件确定的运行选项。
@@ -360,31 +359,33 @@ const shellArgIndex = 1
 
 // runSubcommand 处理 shellArgIndex 位置上的旁路子命令（init / complete）。
 // 它只认位置、不认注入参数的名字：这个位置被 shell 占用时，用户写的名字
-// 就会按项目名解析。
-func runSubcommand(args []string, out io.Writer) (bool, error) {
+// 就会按项目名解析。输出经 Console 并带上各自的来源标识，便于 transform 区分。
+func runSubcommand(args []string, con *console.Console) (bool, error) {
 	if len(args) <= shellArgIndex {
 		return false, nil
 	}
 	switch args[shellArgIndex] {
 	case "init":
-		return true, shell.Init(args[shellArgIndex+1:], out)
+		// 输出会被 shell eval，必须原样写出。
+		return true, shell.Init(args[shellArgIndex+1:], con.Writer(console.SourceRaw))
 	case "complete":
-		return true, completeSubcommand(args[shellArgIndex+1:], out)
+		// 输出会被 shell 解析，必须原样写出。
+		return true, completeSubcommand(args[shellArgIndex+1:], con.Writer(console.SourceRaw))
 	}
 	return false, nil
 }
 
 // Main 是命令行的完整流程：init / complete 子命令、索引校验、解析与执行。
 func Main(args []string) {
-	// 整个程序直写控制台，先打开 ANSI 解析与 UTF-8 代码页。
-	sysinfo.EnableVT()
+	// 所有控制台输出都走这个闸门；构造时同时开启 Windows 的 ANSI 解析与 UTF-8 代码页。
+	con := console.New()
 
 	// init / complete 都是只读旁路，不解析项目参数。
 	// shell 函数会把一个内部参数注入到 shellArgIndex 位置，所以 `work init` /
 	// `work complete` 里的名字仍是项目名，不会走到这里。
-	if handled, err := runSubcommand(args, os.Stdout); handled {
+	if handled, err := runSubcommand(args, con); handled {
 		if err != nil {
-			sysinfo.Fail(err, 2, false)
+			con.Fail(err, 2)
 		}
 		return
 	}
@@ -399,24 +400,25 @@ func Main(args []string) {
 	// 用 ContinueOnError 自己处理错误：pflag 的 ExitOnError 会把错误打到 stdout。
 	fs := pflag.NewFlagSet(args[0], pflag.ContinueOnError)
 	o, err := parseWith(fs, args[1:], cfg)
+	con.SetNoColor(o.Config.NoColor)
 	if err != nil {
-		sysinfo.Fail(err, 2, o.Config.NoColor)
+		con.Fail(err, 2)
 	}
 	if o.Help {
-		writeHelp(os.Stdout)
+		writeHelp(con.Writer(console.SourceHelp))
 		return
 	}
 	if cfgErr != nil {
-		sysinfo.Fail(cfgErr, 1, o.Config.NoColor)
+		con.Fail(cfgErr, 1)
 	}
-	if err := Run(o, cfg); err != nil {
-		sysinfo.Fail(err, 1, o.Config.NoColor)
+	if err := Run(o, cfg, con); err != nil {
+		con.Fail(err, 1)
 	}
 }
 
 // Run 解析工作区、定位目标、渲染仪表盘，成功时把目标目录写入 --cwd-file。
-func Run(o Options, cfg config.Config) error {
-	sysinfo.EnableVT()
+func Run(o Options, cfg config.Config, con *console.Console) error {
+	con.SetNoColor(o.Config.NoColor)
 
 	workspace, err := cfg.ResolveWorkspace(o.Workspace)
 	if err != nil {
@@ -427,7 +429,6 @@ func Run(o Options, cfg config.Config) error {
 	opts := render.DefaultOptions()
 	opts.Indent = o.Config.Indent
 	opts.Workspace = workspace
-	opts.NoColor = o.Config.NoColor
 	opts.RecentLimit = o.Config.RecentLimit
 	opts.RecentNameWidth = o.Config.RecentNameWidth
 	opts.DiskWarnGB = o.Config.DiskWarnGB
@@ -437,7 +438,7 @@ func Run(o Options, cfg config.Config) error {
 	opts.ShowRecent = o.Config.ShowRecent
 	opts.ClearScreen = o.Config.ClearScreen
 	opts.Quotes = o.Config.Quotes
-	r := render.New(opts)
+	r := render.New(opts, con)
 	projects := project.List(workspace)
 
 	var (
@@ -446,7 +447,7 @@ func Run(o Options, cfg config.Config) error {
 	)
 
 	if clone.IsURL(o.Project) {
-		if target, err = clone.Project(workspace, o.Project, r); err != nil {
+		if target, err = clone.Project(workspace, o.Project, r, con); err != nil {
 			return err
 		}
 		// 刚克隆下来的目录也要出现在仪表盘里

@@ -3,12 +3,12 @@ package clone
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"gowork/internal/console"
 	"gowork/internal/project"
 	"gowork/internal/render"
 )
@@ -77,7 +77,7 @@ func validRepoName(name string) bool {
 
 // Project 把仓库克隆到工作区并返回目标目录。
 // 目录已存在时什么都不做，直接进去，所以重复执行是幂等的。
-func Project(workspace, rawURL string, r *render.Renderer) (string, error) {
+func Project(workspace, rawURL string, r *render.Renderer, con *console.Console) (string, error) {
 	if !project.IsDir(workspace) {
 		return "", fmt.Errorf("目录不存在：%s", workspace)
 	}
@@ -99,9 +99,7 @@ func Project(workspace, rawURL string, r *render.Renderer) (string, error) {
 
 	// 让 git 直接占用当前控制台，进度条和凭据提示都能正常工作。
 	cmd := exec.Command("git", "clone", rawURL, dest)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	con.Attach(cmd)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("克隆失败：%s", rawURL)
 	}
