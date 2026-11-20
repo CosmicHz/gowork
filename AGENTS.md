@@ -74,7 +74,13 @@ install_test.sh            安装脚本的配置命令识别、替换与去重�
 所有控制台通信都走 `internal/console`：仪表盘、帮助、`init` / `complete` 的输出、错误
 与 `git clone` 的终端接管都必须经 `Console`，不要在别处直接写 `os.Stdout` / `os.Stderr`。
 `Console` 持有两个流与各自的 tty 判定、颜色开关、宽度与主色，并通过
-`SetTransform(func(Source, string) string)` 在写出前加工文本。transform 是通用钩子，
+`SetTransform(func(Source, string) string)` 在写出前加工文本。每次运行只有一个实例
+（`cli.Main` 构造后传给 render、clone 与子命令），`write` 是行号的唯一更新点：
+按写出的换行数维护 `line`，`Line()` 返回下一条输出所在的行号（1 起），
+`ClearScreen` 会把它归零（输出被重定向时也一样）。**只允许存在一个 `Console` 实例**：
+除 `cli.Main` 外，非测试源码不得调用 `console.New` / `console.NewWith`，也不得直接写
+`console.Console{}`；`internal/cli/single_console_test.go` 会扫描源码拦住这类写法。
+transform 是通用钩子，
 样式、转义、过滤或记录都可以放在这里；内置实现目前只做整段着色，分工按“整段是否同色”
 划分：`error` → 红（按 stderr 的 tty）、`banner` / `greeting` / `recent` / `clone` → 主色、
 `project` → 白、`rule` → 暗灰、`quote` → 绿、`warning` → 黄；纯空白行跳过。
@@ -357,12 +363,16 @@ go test ./...
 - `internal/console/console_test.go`：`Paint` 的三种颜色开关、带来源标识的 `SetTransform`
   对 `Print` / `Println` / `Writer` 的统一加工、`TestRawSourceBypassesTransform` 钉住
   `SourceRaw` 连自定义 transform 都不调用、默认 transform 按来源给整段同色的输出上色，
+  `TestLineTracksOutput` 钉住 `Line()` 随输出换行推进、清屏后归零，
   以及清屏 / 窗口标题只在 tty 下写出且绕过 transform。
   `internal/render/render_test.go` 的 `TestRenderTagsOutputSources` 钉住仪表盘各段
   （default / banner / project / rule / greeting / recent / quote / warning / clone）
   把真实来源交给 transform，自行上色的 `SourceRaw` 行不进入 transform。
 - `internal/cli/cli_test.go` 覆盖索引短选项与 `checkIndexArgs`：`-1`…`-9` 可用、
   `-1=5` 报错、`-1 -2` 冲突、`-10`/`-12` 提示改用 `--recent`、`-p -12` 不被误判。
+- `internal/cli/single_console_test.go`：扫描全部非测试源码，只允许 `cli.go` 构造
+  `Console`（`console.New` / `console.NewWith` / `console.Console{}` 都算），
+  并用合成源码确认扫描本身有效。
 - 跳过项取决于环境：缺 zsh / dash / fish 会跳过对应的语法检查；Windows 上建不了
   符号链接时跳过该用例。CI 会确保解释器存在。
 

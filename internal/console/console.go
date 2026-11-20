@@ -37,6 +37,8 @@ const (
 type Transform func(source Source, text string) string
 
 // Console 持有控制台的两个输出流与终端状态。请用 New / NewWith 构造。
+// 每次运行只有一个实例：cli.Main 构造后传给 render、clone 与子命令，
+// 因此它记录的当前行号对整个输出过程都成立。
 type Console struct {
 	stdout    io.Writer // 标准输出流，仪表盘、帮助与子命令输出都写这里
 	stderr    io.Writer // 标准错误流，只用于错误信息
@@ -45,6 +47,7 @@ type Console struct {
 	noColor   bool      // 是否禁用颜色（--no-color / 配置项）
 	width     int       // 终端宽度，探测失败按 80 兜底
 	accent    string    // 本次运行的主色
+	line      int       // 已经写完的行数，Line 据此给出当前行号
 	transform Transform // 写出前的统一加工，nil 表示原样输出
 }
 
@@ -137,9 +140,15 @@ func (c *Console) IsTerminal() bool { return c.stdoutTTY }
 // Width 返回构造时探测到的终端宽度。
 func (c *Console) Width() int { return c.width }
 
+// Line 返回下一条输出所在的行号，从 1 开始；清屏后回到 1。
+// 行号按已经写出的换行数计算，供需要纵向坐标的输出使用。
+func (c *Console) Line() int { return c.line + 1 }
+
 // ClearScreen 清屏并清掉回滚缓冲；输出被重定向时不做任何事。
 // 终端控制序列直接写出，不经过 transform，避免被样式加工破坏。
 func (c *Console) ClearScreen() {
+	// 无论是否真正写了清屏序列，逻辑上都从新的一屏开始。
+	c.line = 0
 	if !c.stdoutTTY {
 		return
 	}
@@ -201,10 +210,12 @@ func (c *Console) colorEnabled(isTTY bool) bool {
 
 // write 是所有标准输出/错误写出的终点。SourceRaw 表示文本已由调用方处理完毕，
 // 直接写出、不经过 transform；其余来源统一执行 transform。
+// 这里同时是行号的唯一更新点，所有输出（包括 Writer）都会经过它。
 func (c *Console) write(source Source, w io.Writer, s string) error {
 	if source != SourceRaw && c.transform != nil {
 		s = c.transform(source, s)
 	}
+	c.line += strings.Count(s, "\n")
 	_, err := io.WriteString(w, s)
 	return err
 }

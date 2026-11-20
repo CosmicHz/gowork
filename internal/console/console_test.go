@@ -111,6 +111,40 @@ func TestTerminalSequencesOnlyOnTTY(t *testing.T) {
 	}
 }
 
+// TestLineTracksOutput 钉住 Console 维护的当前行号：所有写出路径都会推进，
+// 清屏后归零；Line 从 1 开始。
+func TestLineTracksOutput(t *testing.T) {
+	out := &bytes.Buffer{}
+	con := NewWith(out, io.Discard, false, false)
+
+	if got := con.Line(); got != 1 {
+		t.Errorf("初始行号 = %d，想要 1", got)
+	}
+	con.Print(SourceDefault, "a")
+	if got := con.Line(); got != 1 {
+		t.Errorf("没有换行时行号不该变，得到 %d", got)
+	}
+	con.Println(SourceDefault, "b")
+	if got := con.Line(); got != 2 {
+		t.Errorf("Println 后行号 = %d，想要 2", got)
+	}
+	con.Print(SourceDefault, "c\nd")
+	if got := con.Line(); got != 3 {
+		t.Errorf("一次写多个换行后行号 = %d，想要 3", got)
+	}
+	if _, err := io.WriteString(con.Writer(SourceDefault), "e\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := con.Line(); got != 4 {
+		t.Errorf("Writer 写出后行号 = %d，想要 4", got)
+	}
+
+	con.ClearScreen()
+	if got := con.Line(); got != 1 {
+		t.Errorf("清屏后行号应回到 1，得到 %d", got)
+	}
+}
+
 // TestDefaultTransformColorsUniformSources 钉住默认加工的分工：整段同色的来源由
 // transform 着色；SourceRaw 在 write 里就被跳过，defaultTransform 对它保持原样。
 func TestDefaultTransformColorsUniformSources(t *testing.T) {
