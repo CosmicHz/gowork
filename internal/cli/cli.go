@@ -61,10 +61,6 @@ func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
 		fs.BoolVarP(&o.index[d], name, strconv.Itoa(d), false, fmt.Sprintf("按最近修改排序的第 %d 个项目", d))
 		_ = fs.MarkHidden(name)
 	}
-
-	fs.Usage = func() {
-		writeHelp(fs.Output())
-	}
 }
 
 // ignoredOption 判断选项是否不参与“选项名与目录同名”提示：
@@ -295,6 +291,9 @@ func joinWords(items []string) string {
 func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, error) {
 	o := Options{Config: cfg, Args: args}
 	registerFlags(fs, &o, cfg)
+	fs.Usage = func() {
+		writeHelp(fs.Output(), !invokedByShell(args))
+	}
 
 	// -10、-12、-0 这类写法 pflag 处理不了或会静默出错，先拦下来。
 	if err := checkIndexArgs(fs, args); err != nil {
@@ -357,6 +356,13 @@ func Parse(args []string, cfg config.Config) (Options, error) {
 // 只有直接运行 gowork 时，这个位置才可能是用户写的子命令。
 const shellArgIndex = 1
 
+// invokedByShell 判断这次是不是 shell 函数发起的调用：函数总在第一个用户参数
+// 的位置注入 --cwd-file，直接运行二进制时该位置是用户自己写的参数。
+// 经 shell 调用时子命令不可用，帮助里也不该列出来。
+func invokedByShell(args []string) bool {
+	return len(args) > 0 && (args[0] == "--cwd-file" || strings.HasPrefix(args[0], "--cwd-file="))
+}
+
 // runSubcommand 处理 shellArgIndex 位置上的旁路子命令（init / complete）。
 // 它只认位置、不认注入参数的名字：这个位置被 shell 占用时，用户写的名字
 // 就会按项目名解析。输出经 Console 并带上各自的来源标识，便于 transform 区分。
@@ -412,7 +418,7 @@ func Main(args []string) {
 		con.Fail(err, 2)
 	}
 	if o.Help {
-		writeHelp(con.Writer(console.SourceHelp))
+		writeHelp(con.Writer(console.SourceHelp), !invokedByShell(args[1:]))
 		return
 	}
 	if cfgErr != nil {

@@ -7,16 +7,15 @@ import (
 
 // writeHelp 输出 gowork 的帮助。选项部分手写而不是交给 pflag.FlagUsages：
 // 它会把布尔项写成 [=true|false]、用 Go 类型当占位符，也描述不了
-// 短选项别名、组合写法、索引短选项和用户可见的 init 子命令（complete 仅供补全，不列出）。
+// 短选项别名、组合写法、索引短选项和子命令（init / complete）。
 // 左列保持纯 ASCII，才能用 len 对齐；中文说明放在右列，不参与列宽计算。
-func writeHelp(w io.Writer) {
-	fmt.Fprint(w, `用法: gowork [选项] [项目]
-      gowork init <SHELL>
-
-进入工作区内的项目并显示仪表盘。项目可写完整名称、唯一前缀或仓库地址。
-
-选项:
-`)
+// showSubcommands 为 false 时（经 shell 函数调用）不列子命令：那个位置被内部参数占住了。
+func writeHelp(w io.Writer, showSubcommands bool) {
+	fmt.Fprint(w, "用法: gowork [选项] [项目]\n")
+	if showSubcommands {
+		fmt.Fprint(w, "      gowork init <SHELL>\n")
+	}
+	fmt.Fprint(w, "\n进入工作区内的项目并显示仪表盘。项目可写完整名称、唯一前缀或仓库地址。\n\n选项:\n")
 	writeHelpRows(w, [][2]string{
 		{"-p, --project <PROJECT>", "要跳转的项目：完整名称、唯一前缀或仓库地址"},
 		{"-1..-9, --recent <N>", "按最近修改排序的第 N 个项目"},
@@ -25,14 +24,17 @@ func writeHelp(w io.Writer) {
 		{"-n, --no-color", "禁用 ANSI 颜色"},
 		{"-h, --help", "显示帮助并退出"},
 	})
-	fmt.Fprint(w, "\n子命令:\n")
-	writeHelpRows(w, [][2]string{
-		{"init <SHELL>", "输出 shell 集成代码：powershell、zsh、sh、fish"},
-	})
-	fmt.Fprint(w, `
-只允许用一种方式指定一个项目。
-通过 shell 函数调用时 init / complete 等子命令被当作项目名，直接运行 gowork init 等才会生效。
-`)
+	if showSubcommands {
+		fmt.Fprint(w, "\n子命令:\n")
+		writeHelpRows(w, [][2]string{
+			{"init <SHELL>", "输出 shell 集成代码：powershell、zsh、sh、fish"},
+			{"complete <KIND>", "输出补全候选：projects（供 shell 补全使用）"},
+		})
+	}
+	fmt.Fprint(w, "\n只允许用一种方式指定一个项目。\n")
+	if showSubcommands {
+		fmt.Fprint(w, "通过 shell 函数调用时 init / complete 等子命令被当作项目名，直接运行 gowork init / complete 才会生效。\n")
+	}
 }
 
 // writeHelpRows 按 ASCII 左列宽度对齐输出两列表格。

@@ -176,6 +176,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
   `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
   bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
+  子命令段只在直接运行 `gowork -h` 时输出：`invokedByShell` 看第一个用户参数是不是
+  shell 注入的 `--cwd-file`，`work -h` 里子命令本来就用不了，列出来只会误导。
 - `--` 之后的参数都按项目名处理；gowork 只接受一个项目名。多写直接报错并列出多写的部分。
   项目名是否来自 `--` 用 `fs.ArgsLenAtDash() == 0` 判断（值为 0 说明终止符后面
   紧跟着项目名；`--workspace --` 里的 `--` 是值，pflag 不会记 dash）。

@@ -531,9 +531,46 @@ func TestParseHelp(t *testing.T) {
 	}
 }
 
+// TestHelpHidesSubcommandsWhenShellInvoked 钉住经 shell 函数调用时帮助里不列子命令：
+// 那个位置被内部参数占住，init / complete 只会被当成项目名。
+func TestHelpHidesSubcommandsWhenShellInvoked(t *testing.T) {
+	var out bytes.Buffer
+	writeHelp(&out, false)
+	got := out.String()
+
+	for _, unwanted := range []string{"gowork init <SHELL>", "子命令", "init <SHELL>", "complete <KIND>", "通过 shell 函数调用"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("经 shell 调用时帮助不该包含 %q\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "只允许用一种方式指定一个项目") {
+		t.Errorf("项目选择说明应保留\n%s", got)
+	}
+}
+
+// TestInvokedByShell 钉住调用来源的判定：只有第一个用户参数是 shell 注入的
+// --cwd-file 时才算经 shell 调用。
+func TestInvokedByShell(t *testing.T) {
+	cases := []struct {
+		desc string
+		args []string
+		want bool
+	}{
+		{"直接运行", []string{"-h"}, false},
+		{"直接运行带项目", []string{"my-app"}, false},
+		{"shell 注入", []string{"--cwd-file=C:\\tmp\\x", "-h"}, true},
+		{"shell 注入分离写法", []string{"--cwd-file", "x", "-h"}, true},
+	}
+	for _, c := range cases {
+		if got := invokedByShell(c.args); got != c.want {
+			t.Errorf("%s：invokedByShell(%v) = %v，想要 %v", c.desc, c.args, got, c.want)
+		}
+	}
+}
+
 func TestHelpOutput(t *testing.T) {
 	var out bytes.Buffer
-	writeHelp(&out)
+	writeHelp(&out, true)
 	got := out.String()
 
 	for _, want := range []string{
@@ -546,6 +583,8 @@ func TestHelpOutput(t *testing.T) {
 		"-n, --no-color",
 		"-h, --help",
 		"init <SHELL>",
+		"complete <KIND>",
+		"projects",
 		"powershell、zsh、sh、fish",
 		"只允许用一种方式指定一个项目",
 	} {
