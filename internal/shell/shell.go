@@ -53,7 +53,7 @@ const shWorkFunc = `work() {
         return 1
     }
 
-    command "$bin" --cwd-file="$cwd_file" "$@"
+    command "$bin" --cwd-file="$cwd_file" --__i-am-a-shell-function "$@"
     rc=$?
 
     if [ "$rc" -eq 0 ] && [ -s "$cwd_file" ]; then
@@ -142,7 +142,7 @@ function work --description 'gowork：跳转项目并渲染仪表盘'
         return 1
     end
 
-    command $bin --cwd-file=$cwd_file $argv
+    command $bin --cwd-file=$cwd_file --__i-am-a-shell-function $argv
     set -l rc $status
 
     if test $rc -eq 0; and test -s $cwd_file
@@ -247,7 +247,7 @@ function global:work {
 
     $cwdFile = [System.IO.Path]::GetTempFileName()
     try {
-        $exeArgs = @("--cwd-file=$cwdFile") + @(ConvertTo-GoworkArgs $args)
+        $exeArgs = @("--cwd-file=$cwdFile", "--__i-am-a-shell-function") + @(ConvertTo-GoworkArgs $args)
 
         # Start-Process joins arguments as-is, so each one is quoted here.
         $argumentLine = ($exeArgs | Microsoft.PowerShell.Core\ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '

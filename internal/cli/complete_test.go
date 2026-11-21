@@ -97,9 +97,8 @@ func TestCompleteSubcommandProjects(t *testing.T) {
 	}
 }
 
-// TestRunSubcommand 钉住子命令只在 shellArgIndex 位置生效，且只看位置、不看注入参数的名字。
-// shell 函数总会在这个位置注入一个内部参数（当前是 --cwd-file），
-// 所以 work 里的 init / complete 是项目名。
+// TestRunSubcommand 钉住子命令只在直接运行时生效：shell 标记出现时全部失效；
+// 选项可以写在子命令前面，但只有第一个位置参数是 init / complete 才算。
 func TestRunSubcommand(t *testing.T) {
 	cases := []struct {
 		desc    string
@@ -108,11 +107,17 @@ func TestRunSubcommand(t *testing.T) {
 	}{
 		{"init 直连", []string{"gowork", "init", "sh"}, true},
 		{"complete 直连", []string{"gowork", "complete", "bogus"}, true},
-		{"cwd-file 之后的 complete 是项目名", []string{"gowork", "--cwd-file=/tmp/x", "complete"}, false},
-		{"cwd-file 之后的 init 是项目名", []string{"gowork", "--cwd-file=/tmp/x", "init"}, false},
-		{"换一个内部参数名也一样", []string{"gowork", "--internal", "init"}, false},
-		{"短选项作内部参数也一样", []string{"gowork", "-x", "complete"}, false},
-		{"第二个项目名不是子命令", []string{"gowork", "my-app", "complete"}, false},
+		{"init 后面没有参数", []string{"gowork", "init"}, true},
+		{"complete 后面没有参数", []string{"gowork", "complete"}, true},
+		{"选项可以写在前面", []string{"gowork", "-n", "init", "sh"}, true},
+		{"cwd-file 之后的 complete", []string{"gowork", "--cwd-file=/tmp/x", "complete"}, true},
+		{"项目名之后的 init 不算", []string{"gowork", "my-app", "init"}, false},
+		{"项目名之后的 complete 不算", []string{"gowork", "my-app", "complete"}, false},
+		{"选项取值是 init 不算", []string{"gowork", "-p", "init"}, false},
+		{"--project 的值是 init 不算", []string{"gowork", "--project", "init"}, false},
+		{"-- 之后的 init 不算", []string{"gowork", "--", "init"}, false},
+		{"shell 标记让 init 失效", []string{"gowork", "--" + shellMarker, "init", "sh"}, false},
+		{"shell 标记在任何位置都生效", []string{"gowork", "my-app", "--" + shellMarker, "complete"}, false},
 		{"普通项目", []string{"gowork", "my-app"}, false},
 		{"没有参数", []string{"gowork"}, false},
 	}
@@ -125,5 +130,38 @@ func TestRunSubcommand(t *testing.T) {
 				t.Errorf("runSubcommand(%v) handled = %v, 想要 %v", c.args, handled, c.handled)
 			}
 		})
+	}
+}
+
+// TestRunSubcommandRejectsSelectors 钉住子命令前后的项目选择器都会报错，而不是被丢掉。
+func TestRunSubcommandRejectsSelectors(t *testing.T) {
+	cases := [][]string{
+		{"gowork", "--recent", "2", "init", "sh"},
+		{"gowork", "--project", "foo", "complete", "projects"},
+		{"gowork", "-1", "init", "sh"},
+		{"gowork", "init", "sh", "--recent", "2"},
+		{"gowork", "complete", "projects", "--project", "foo"},
+		{"gowork", "init", "-1"},
+	}
+	for _, args := range cases {
+		var out bytes.Buffer
+		con := console.NewWith(&out, io.Discard, false, false)
+		handled, err := runSubcommand(args, con)
+		if !handled || err == nil {
+			t.Errorf("runSubcommand(%v) = %v, %v；想要 handled 且报错", args, handled, err)
+		}
+	}
+}
+
+// TestRunSubcommandHelpBefore 钉住子命令前的 -h 仍然显示帮助。
+func TestRunSubcommandHelpBefore(t *testing.T) {
+	var out bytes.Buffer
+	con := console.NewWith(&out, io.Discard, false, false)
+	handled, err := runSubcommand([]string{"gowork", "-h", "init", "sh"}, con)
+	if !handled || err != nil {
+		t.Fatalf("runSubcommand = %v, %v；想要 handled 且无错误", handled, err)
+	}
+	if !strings.Contains(out.String(), "用法: gowork") {
+		t.Errorf("应输出帮助，得到 %q", out.String())
 	}
 }

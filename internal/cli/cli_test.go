@@ -548,9 +548,8 @@ func TestHelpHidesSubcommandsWhenShellInvoked(t *testing.T) {
 	}
 }
 
-// TestInvokedByShell 钉住调用来源的判定：只有第一个用户参数是 shell 注入的
-// --cwd-file 时才算经 shell 调用。
-func TestInvokedByShell(t *testing.T) {
+// TestInvokeByShell 钉住调用来源的判定：shell 标记出现在 `--` 之前才算数。
+func TestInvokeByShell(t *testing.T) {
 	cases := []struct {
 		desc string
 		args []string
@@ -558,12 +557,13 @@ func TestInvokedByShell(t *testing.T) {
 	}{
 		{"直接运行", []string{"-h"}, false},
 		{"直接运行带项目", []string{"my-app"}, false},
-		{"shell 注入", []string{"--cwd-file=C:\\tmp\\x", "-h"}, true},
-		{"shell 注入分离写法", []string{"--cwd-file", "x", "-h"}, true},
+		{"标记在最前", []string{"--" + shellMarker, "-h"}, true},
+		{"标记在中间", []string{"-h", "--" + shellMarker}, true},
+		{"-- 之后不算", []string{"--", "--" + shellMarker}, false},
 	}
 	for _, c := range cases {
-		if got := invokedByShell(c.args); got != c.want {
-			t.Errorf("%s：invokedByShell(%v) = %v，想要 %v", c.desc, c.args, got, c.want)
+		if got := InvokeByShell(c.args); got != c.want {
+			t.Errorf("%s：InvokeByShell(%v) = %v，想要 %v", c.desc, c.args, got, c.want)
 		}
 	}
 }

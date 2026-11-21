@@ -116,14 +116,14 @@ func TestPowerShellAcceptsNativeArgs(t *testing.T) {
 
 	for i, c := range cases {
 		got := calls[i]
-		// 第一个参数必须由 work 函数自己注入；这里只要求它是个选项，
-		// 不绑定具体名字，避免把内部参数写死成 cwd-file。
-		if len(got) == 0 || !strings.HasPrefix(got[0], "-") {
-			t.Errorf("%s：第一次调用缺少内部参数：%v", c.name, got)
+		// 前两个参数由 work 函数注入：--cwd-file=<临时文件> 与 shell 标记。
+		// 不能按前缀跳过，因为用户也可能自己传 --cwd-file。
+		if len(got) < 2 || !strings.HasPrefix(got[0], "--cwd-file=") ||
+			got[1] != "--__i-am-a-shell-function" {
+			t.Errorf("%s：注入参数不对：%v", c.name, got)
 			continue
 		}
-		// 第一项是函数自己注入的内部参数，之后才是用户参数。
-		got = got[1:]
+		got = got[2:]
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s：得到 %v，想要 %v", c.name, got, c.want)
 		}
@@ -164,7 +164,7 @@ func TestInit(t *testing.T) {
 				t.Fatalf("Init(%q) 返回错误：%v", name, err)
 			}
 			script := out.String()
-			for _, want := range []string{"work", "--cwd-file", "GOWORK_BIN"} {
+			for _, want := range []string{"work", "--cwd-file", "--__i-am-a-shell-function", "GOWORK_BIN"} {
 				if !strings.Contains(script, want) {
 					t.Errorf("输出缺少 %q：\n%s", want, script)
 				}

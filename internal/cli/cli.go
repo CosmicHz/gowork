@@ -54,6 +54,11 @@ func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
 	fs.BoolVarP(&o.Config.NoColor, "no-color", "n", cfg.NoColor, "禁用 ANSI 颜色")
 	fs.BoolVarP(&o.Help, "help", "h", false, "显示帮助并退出")
 
+	// shell 函数注入的隐藏标记：出现时忽略所有子命令。
+	// 名字刻意取得不会与工作区目录重名。
+	fs.Bool(shellMarker, false, "内部使用：由 shell 函数注入，出现时忽略子命令")
+	_ = fs.MarkHidden(shellMarker)
+
 	// -1…-9 是不带值的开关：pflag 对 bool 选项自动设 NoOptDefVal="true"，
 	// 所以 -1 不会去抢下一个参数。长名字只为满足注册要求，帮助里隐藏。
 	for d := 1; d <= maxIndexShorthand; d++ {
@@ -68,7 +73,7 @@ func registerFlags(fs *pflag.FlagSet, o *Options, cfg config.Config) {
 // 索引短选项的歧义由 project.Resolve 负责，否则会重复提示。
 func ignoredOption(name string) bool {
 	switch name {
-	case "cwd-file", "help":
+	case "cwd-file", "help", shellMarker:
 		return true
 	}
 	rest, ok := strings.CutPrefix(name, "index")
@@ -292,7 +297,7 @@ func parseWith(fs *pflag.FlagSet, args []string, cfg config.Config) (Options, er
 	o := Options{Config: cfg, Args: args}
 	registerFlags(fs, &o, cfg)
 	fs.Usage = func() {
-		writeHelp(fs.Output(), !invokedByShell(args))
+		writeHelp(fs.Output(), !InvokeByShell(args))
 	}
 
 	// -10、-12、-0 这类写法 pflag 处理不了或会静默出错，先拦下来。
@@ -350,35 +355,121 @@ func Parse(args []string, cfg config.Config) (Options, error) {
 	return parseWith(fs, args, cfg)
 }
 
-// shellArgIndex 是子命令所在的位置，也是 shell 函数注入内部参数的位置。
-// shell 函数总在用户参数之前插入一个参数，占住这里，
-// 因此通过 work 调用时 init / complete 永远到不了子命令分支；
-// 只有直接运行 gowork 时，这个位置才可能是用户写的子命令。
-const shellArgIndex = 1
+// shellMarker 是 shell 函数注入的隐藏参数，用来区分「经 work 调用」与「直接运行
+// gowork」。名字刻意取得不可能与工作区目录重名。
+const shellMarker = "__i-am-a-shell-function"
 
-// invokedByShell 判断这次是不是 shell 函数发起的调用：函数总在第一个用户参数
-// 的位置注入 --cwd-file，直接运行二进制时该位置是用户自己写的参数。
-// 经 shell 调用时子命令不可用，帮助里也不该列出来。
-func invokedByShell(args []string) bool {
-	return len(args) > 0 && (args[0] == "--cwd-file" || strings.HasPrefix(args[0], "--cwd-file="))
+// InvokeByShell 判断是不是 shell 函数发起的调用：用户参数（不含程序名）里
+// 出现 shell 标记就是。`--` 之后是项目名，不再当作选项，所以提前结束。
+func InvokeByShell(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--"+shellMarker {
+			return true
+		}
+	}
+	return false
 }
 
-// runSubcommand 处理 shellArgIndex 位置上的旁路子命令（init / complete）。
-// 它只认位置、不认注入参数的名字：这个位置被 shell 占用时，用户写的名字
-// 就会按项目名解析。输出经 Console 并带上各自的来源标识，便于 transform 区分。
+// runSubcommand 处理用户参数里的旁路子命令（init / complete）。
+// 经 shell 函数调用时忽略所有子命令；输出经 Console 并带上各自的来源标识，
+// 便于 transform 区分。
 func runSubcommand(args []string, con *console.Console) (bool, error) {
-	if len(args) <= shellArgIndex {
+	if len(args) < 2 {
 		return false, nil
 	}
-	switch args[shellArgIndex] {
+	rest := args[1:]
+	if InvokeByShell(rest) {
+		return false, nil
+	}
+	// 选项可以写在子命令前面（如 -n），但不能指定项目。
+	// 这里只借注册信息判断选项形状，值由下面的 parseOptions 解析。
+	fs := pflag.NewFlagSet("gowork", pflag.ContinueOnError)
+	registerFlags(fs, &Options{}, config.DefaultConfig())
+
+	i := findSubcommand(fs, rest)
+	if i < 0 {
+		return false, nil
+	}
+	// 子命令前后都可能写了选项（i == 0 / i+1 == len(rest) 时是空切片），
+	// 统一交给 parseOptions 校验，项目选择器一律报错。
+	leading, err := parseOptions(rest[:i])
+	if err != nil {
+		return true, err
+	}
+	if leading.Help {
+		writeHelp(con.Writer(console.SourceHelp), true)
+		return true, nil
+	}
+	if err := rejectSelectors("前", leading); err != nil {
+		return true, err
+	}
+	trailing, err := parseOptions(rest[i+1:])
+	if err != nil {
+		return true, err
+	}
+	if err := rejectSelectors("后", trailing); err != nil {
+		return true, err
+	}
+	switch rest[i] {
 	case "init":
 		// 输出会被 shell eval，必须原样写出。
-		return true, shell.Init(args[shellArgIndex+1:], con.Writer(console.SourceRaw))
+		return true, shell.Init(rest[i+1:], con.Writer(console.SourceRaw))
 	case "complete":
 		// 输出会被 shell 解析，必须原样写出。
-		return true, completeSubcommand(args[shellArgIndex+1:], con.Writer(console.SourceRaw))
+		return true, completeSubcommand(rest[i+1:], con.Writer(console.SourceRaw))
 	}
 	return false, nil
+}
+
+// findSubcommand 返回子命令在用户参数里的位置；没有则返回 -1。
+// 跳过选项及其取值，`--` 之后不看；只有第一个位置参数是 init / complete 才算，
+// 所以 `gowork -n init sh` 可用，而 `gowork my-app init` 不会当成子命令。
+func findSubcommand(fs *pflag.FlagSet, args []string) int {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return -1
+		}
+		if !isFlagToken(arg) {
+			if arg == "init" || arg == "complete" {
+				return i
+			}
+			return -1
+		}
+		if optionConsumesNext(fs, arg) && i+1 < len(args) {
+			i++
+		}
+	}
+	return -1
+}
+
+// parseOptions 只解析并校验一段选项，位置参数（shell 名、补全项）不参与。
+func parseOptions(args []string) (Options, error) {
+	fs := pflag.NewFlagSet("gowork", pflag.ContinueOnError)
+	o := Options{Config: config.DefaultConfig()}
+	registerFlags(fs, &o, o.Config)
+	if err := checkIndexArgs(fs, args); err != nil {
+		return o, err
+	}
+	if err := fs.Parse(args); err != nil {
+		return o, err
+	}
+	o.UsedFlags = make(map[string]bool)
+	fs.Visit(func(f *pflag.Flag) { o.UsedFlags[f.Name] = true })
+	return o, nil
+}
+
+// rejectSelectors 拒绝子命令前后的项目选择器；位置参数不参与判断。
+// position 填 "前" 或 "后"。用于错误提示。
+func rejectSelectors(position string, o Options) error {
+	selectors, _ := projectSelectors("", o.UsedFlags, o.index)
+	if len(selectors) == 0 {
+		return nil
+	}
+	return fmt.Errorf("子命令%s不能指定项目，多写了：%s", position, joinWords(selectors))
 }
 
 // Main 是命令行的完整流程：init / complete 子命令、索引校验、解析与执行。
@@ -387,8 +478,8 @@ func Main(args []string) {
 	con := console.New()
 
 	// init / complete 都是只读旁路，不解析项目参数。
-	// shell 函数会把一个内部参数注入到 shellArgIndex 位置，所以 `work init` /
-	// `work complete` 里的名字仍是项目名，不会走到这里。
+	// shell 函数会注入内部参数与 shell 标记，所以 `work init` / `work complete`
+	// 里的名字仍是项目名，不会走到这里。
 	if handled, err := runSubcommand(args, con); handled {
 		if err != nil {
 			con.Fail(err, 2)
@@ -418,7 +509,7 @@ func Main(args []string) {
 		con.Fail(err, 2)
 	}
 	if o.Help {
-		writeHelp(con.Writer(console.SourceHelp), !invokedByShell(args[1:]))
+		writeHelp(con.Writer(console.SourceHelp), !InvokeByShell(args[1:]))
 		return
 	}
 	if cfgErr != nil {

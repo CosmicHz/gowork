@@ -414,8 +414,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 ### 子命令与目录同名
 
-`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）
-都只在直接运行 `gowork` 时生效。shell 函数总在用户参数之前插入一个内部参数，占住子命令所在的位置，所以 `work init` / `work complete` 里的名字是项目名。
+`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）都只在直接运行 `gowork` 时生效。shell 函数总在用户参数之前插入内部参数，所以 `work init` / `work complete` 里的名字是项目名。换句话说，子命令在 `work` 调用方式中无效。
 工作区里若真有名为 `init` 或 `complete` 的目录，`work init` / `work complete` 会直接进入它。
 
 ### 选项名与目录同名

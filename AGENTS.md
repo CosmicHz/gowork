@@ -19,11 +19,12 @@
 
 ## 一次运行的完整链路
 
-1. shell 函数执行 `gowork --cwd-file=<临时文件> <用户参数>`；PowerShell 只翻译
+1. shell 函数执行 `gowork --cwd-file=<临时文件> --__i-am-a-shell-function <用户参数>`；
+   PowerShell 只翻译
    `-Project` / `-IndentSize` / `-Workspace`，其余参数原样透传。
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
-3. `cli.Main`：`console.New()`（绑定 stdout/stderr 并开启 VT）→ `runSubcommand` 按
-   `os.Args[1]` 处理 `init` / `complete` 并直接返回 → `config.Load()` →
+3. `cli.Main`：`console.New()`（绑定 stdout/stderr 并开启 VT）→ `runSubcommand` 找
+   `init` / `complete` 并直接返回 → `config.Load()` →
    `parseWith`（内部先 `checkIndexArgs`，再 `pflag.Parse`）。
 4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New(opts, con)` → `project.List` →
    若参数像仓库地址则 `clone.Project(..., con)` 并重扫项目，否则 `project.Resolve`。
@@ -32,9 +33,11 @@
 7. 失败统一走 `console.Fail`：错误写 stderr，参数错误退出 2，业务错误退出 1；
    **不切换目录**。
 
-注意：生成的函数把 `--cwd-file` 放在用户参数之前。所以 `work init` / `work complete`
-是**项目名**（`flag.Arg(0)`），不会触发子命令；只有直接运行 `gowork init <shell>`
-或 `gowork complete projects`（子命令位于 `shellArgIndex`）才走旁路。
+注意：生成的函数把 `--cwd-file` 与 `--__i-am-a-shell-function` 放在用户参数之前。
+`runSubcommand` 看到标记就直接放弃所有子命令，所以 `work init` / `work complete` 是**项目名**。
+直接运行时选项可以写在子命令前面（如 `gowork -n init sh`），但子命令前后都不能指定项目：
+`--project` / `--recent` / `-N` 会直接报错，不会静默丢掉。子命令必须是第一个位置参数，
+所以 `gowork my-app init` 不会当成子命令，`gowork --project init` 里的 init 只是项目名。
 
 ## 目录结构
 
@@ -176,8 +179,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   不走 `flag.PrintDefaults` / `pflag.FlagUsages`；`-h` / `--help` 置位 `Options.Help`，
   `Main` 把帮助写 stdout 并以 0 退出，所以 `gowork -h | less` 可用。`help` 注册成普通
   bool 选项，避免 `ErrHelp` 经 `fs.Output()` 把 Usage 写到 stderr。`cwd-file` 是内部选项，不列在帮助里。
-  子命令段只在直接运行 `gowork -h` 时输出：`invokedByShell` 看第一个用户参数是不是
-  shell 注入的 `--cwd-file`，`work -h` 里子命令本来就用不了，列出来只会误导。
+  子命令段只在直接运行 `gowork -h` 时输出：`InvokeByShell` 扫描 `--` 之前的参数里
+  有没有 `--__i-am-a-shell-function`，`work -h` 里子命令本来就用不了，
+  列出来只会误导。
 - `--` 之后的参数都按项目名处理；gowork 只接受一个项目名。多写直接报错并列出多写的部分。
   项目名是否来自 `--` 用 `fs.ArgsLenAtDash() == 0` 判断（值为 0 说明终止符后面
   紧跟着项目名；`--workspace --` 里的 `--` 是值，pflag 不会记 dash）。
@@ -188,7 +192,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   （如 `-n`、`-p`、`--no-color`）。只对 `fs.Visit` 实际解析到的选项
   提示；项目名之后的选项也会算，`--` 之后的不算。`optionToken` /
   `optionConsumesNext` 直接读 pflag 的 `Lookup` / `ShorthandLookup` 与 `NoOptDefVal`。
-  `cwd-file`（shell 自动注入）与 `help` 不提示。
+  `cwd-file` / shell 标记（shell 自动注入）与 `help` 不提示。
   提示按用户实际拼写的选项名比较目录名，消歧写法是 `work ./<选项名>`。
   `complete` 是只给补全用的内部旁路，不参与同名提示。
 
@@ -286,7 +290,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   找不到二进制时 `Write-Error` 并把 `$LASTEXITCODE` 设为 127。
   模板（含注释与提示语）必须保持纯 ASCII，原因见坑 1。
 - 二进制查找：`GOWORK_BIN` 优先，否则 PATH 上的 `gowork`。
-- 集成代码由二进制生成，升级 gowork 后无需重新配置 shell。
+- 集成代码由二进制生成，升级 gowork 后无需重新配置 shell；但当前会话里的函数是启动时
+  生成的，升级后要重新加载配置（或重开终端）才会用上新版本。
 
 ### 安装脚本
 
@@ -324,6 +329,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   用户 PATH（不用 `setx`，避开长度截断），同时更新当前进程 `$env:Path`；`$PROFILE` 追加纯 ASCII
   配置命令。profile 是 UTF-16 时不自动写，改为打印手动步骤，避免混合编码。
 - 自动配置失败只警告并打印手动步骤，不影响二进制安装；重复执行是幂等的。
+- 只有实际修改了 PATH 或配置命令时才提示「重开终端后运行 work」；没有改动就只打印工作区提示。
+  PowerShell 脚本会在结尾用新二进制执行一次 `init powershell`，把 `work` 加载到当前会话
+  （脚本常以 `irm | iex` 运行）；POSIX 脚本运行在子 shell 里，无法影响父 shell，只能提示重开。
 - PowerShell 里用 `throw` 而不是 `exit`：脚本常以 `irm ... | iex` 形式跑在当前会话，
   `exit` 会把终端一起关掉。
 - 下载路径需要网络与 GitHub API（未认证限流 60 次/小时）；源码构建需要本机 Go。
@@ -371,8 +379,8 @@ go test ./...
   - `TestCheckPowerShellDetectsError` 用坏脚本确认检查不是空转。
 - `internal/cli/complete_test.go`：`writeProjectNames` 的输出顺序（最近修改在前）、
   隐藏目录/文件跳过、工作区不存在时无输出；`completeSubcommand` 的用法错误与
-  环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令只在 `shellArgIndex` 生效，
-  且与注入参数的名字无关，
+  环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令前的普通选项可用、
+  项目选择器报错、shell 标记会让所有子命令失效，
   shell 注入内部参数后 `complete` / `init` 按项目名处理。
 - `install_test.sh`（仓库根目录）：不执行安装，只 source `install.sh` 里
   `# ---- 主流程 ----` 之前的函数；覆盖 hook 类型识别、配置命令检测、只改最后一个与去重
@@ -430,10 +438,10 @@ go test ./...
    解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
    不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
    （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
-8. **子命令只在 `shellArgIndex` 位置生效**（`init`、`complete`）。shell 函数总在用户参数之前
-   插入一个内部参数（当前是 `--cwd-file`）占住这个位置，所以 `work init` /
-   `work complete` 是项目名；不要据此认为「`work init`
-   会打印脚本」。
+8. **子命令只在直接运行时生效**（`init`、`complete`），且必须是第一个位置参数。
+   shell 函数注入 `--__i-am-a-shell-function`，`runSubcommand` 看到标记就直接
+   放弃所有子命令。子命令前可以写普通选项（如 `-n`），但 `--project` / `--recent` / `-N`
+   无论写在子命令前后都会报错，而不是被丢掉；`work init` / `work complete` 里的名字是项目名。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
    也因此 `$x = work` 捕获不到仪表盘（这是预期行为）。
 10. **沙箱内跑测试会假失败**。凡是起 `git` 子进程或依赖临时目录权限的用例，都要在沙箱外执行。
@@ -475,9 +483,10 @@ go test ./...
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；
-  子命令统一在 `runSubcommand` 里按 `args[shellArgIndex]` 分派（`Main` 只调用它）。shell 函数总把
-  `--cwd-file` 注入到 `shellArgIndex`（只占用位置，逻辑不依赖它的名字），所以 `work <名字>`
-  永远到不了子命令——这是刻意的：
+  子命令统一在 `runSubcommand` 里用 `findSubcommand` 定位（`Main` 只调用它）：跳过选项取值、
+  取第一个位置参数；子命令前的普通选项会被解析，项目选择器会报错。shell 函数会注入
+  `--__i-am-a-shell-function`；`runSubcommand` 看到标记就忽略所有子命令，
+  所以 `work <名字>` 永远到不了子命令——这是刻意的：
   加子命令默认不需要改 shell 模板。只有当子命令必须能通过 `work` 调用时，才要改所有
   shell 模板（sh / zsh / fish / powershell），并补对应 shell 测试。
   新增只读旁路时优先复用 `config.Load` + `project.List`。
