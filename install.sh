@@ -312,7 +312,9 @@ confirm_action_no() {
 }
 
 # setup_env 把 PATH 与 work 集成写进当前 shell 的 rc；失败只警告，不影响安装。
+# 改到需要重开终端才生效的内容时，把 restart_needed 置 1，供结尾统一提示。
 setup_env() {
+    restart_needed=0
     rc=$(detect_rc) || rc=""
     if [ -z "$rc" ]; then
         printf '\n未识别当前 shell，未修改 PATH 或 shell 配置。\n'
@@ -347,6 +349,7 @@ setup_env() {
         if [ -n "$current" ] && [ "$current" != "$expected" ]; then
             if confirm_action "检测到 $rc 里的${target_label}是 init $current，当前 shell 需要 init $expected；是否换掉？"; then
                 if rewrite_last_block "$rc" "$expected"; then
+                    restart_needed=1
                     printf '\n已把 %s 里的%s从 init %s 换成 init %s。\n' "$rc" "$target_label" "$current" "$expected"
                 else
                     printf '\n无法更新 %s，请手动把%s改成 init %s。\n' "$rc" "$target_label" "$expected"
@@ -423,13 +426,13 @@ $marker_end"
     fi
 
     printf '\n'
+    restart_needed=1
     if [ "$need_path" -eq 1 ]; then
         printf '已把 %s 加入 PATH：%s\n' "$bin_dir" "$rc"
     fi
     if [ "$need_hook" -eq 1 ]; then
         printf '已把 work 集成写入：%s\n' "$rc"
     fi
-    printf '重开终端后生效。\n'
 }
 
 install_from_source() {
@@ -555,4 +558,8 @@ else
     setup_env
 fi
 
-printf '\n重开终端后运行 work；工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
+if [ "${restart_needed:-0}" -eq 1 ]; then
+    printf '\n重开终端后运行 work；工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
+else
+    printf '\n工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
+fi

@@ -238,10 +238,12 @@ function Show-ManualSetup {
 }
 
 function Initialize-Environment {
+    $script:RestartNeeded = $false
     try {
         $changed = Add-UserPath
         if ($changed) {
-            Write-Host "已把 $BinDir 加入用户 PATH（重开终端生效）"
+            $script:RestartNeeded = $true
+            Write-Host "已把 $BinDir 加入用户 PATH"
         }
         else {
             Write-Host "PATH 已包含 $BinDir，无需修改"
@@ -255,7 +257,10 @@ function Initialize-Environment {
 
     try {
         switch (Add-ShellHook) {
-            'added' { Write-Host "已把 work 集成写入 $PROFILE" }
+            'added' {
+                $script:RestartNeeded = $true
+                Write-Host "已把 work 集成写入 $PROFILE"
+            }
             'exists' { Write-Host 'work 集成已存在，跳过' }
             'utf16' { Write-Host '$PROFILE 是 UTF-16 编码，未自动修改'; Show-ManualSetup }
             default { Show-ManualSetup }
@@ -287,5 +292,24 @@ else {
     Initialize-Environment
 }
 
+# 脚本常以 irm | iex 跑在当前会话，所以直接把新的 work 加载进来。
+$loaded = $false
+if (-not $NoModify) {
+    try {
+        $init = (& $exe init powershell | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $init) {
+            Invoke-Expression $init
+            $loaded = $true
+        }
+    }
+    catch {
+    }
+}
+
 Write-Host ''
-Write-Host '重开终端后运行 work；工作区用 GOWORK_WORKSPACE 或配置文件指定。'
+if ($script:RestartNeeded -and -not $loaded) {
+    Write-Host '重开终端后运行 work；工作区用 GOWORK_WORKSPACE 或配置文件指定。'
+}
+else {
+    Write-Host '工作区用 GOWORK_WORKSPACE 或配置文件指定。'
+}
