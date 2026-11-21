@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/0magnet/lolcat-go/lol"
 	"golang.org/x/term"
 
 	"gowork/internal/sysinfo"
@@ -36,6 +37,18 @@ const (
 // Transform 在写出前加工文本；source 告诉加工者这段文本来自程序的哪个部分。
 type Transform func(source Source, text string) string
 
+const (
+	// rainbowChance 是每次运行把主色换成彩虹的概率。
+	rainbowChance = 0.05
+
+	// 彩虹的推进速度。横向按 Freq/Spread 决定每个字符的相位差：
+	// 0.2/1 表示约 31 个字符走完一轮，颜色变化肉眼可辨。
+	rainbowFreq   = 0.2
+	rainbowSpread = 1.0
+	// rainbowPhaseStep 是相邻两段之间纵向错开的相位，避免所有行共用同一条横向渐变。
+	rainbowPhaseStep = 1.0
+)
+
 // Console 持有控制台的两个输出流与终端状态。请用 New / NewWith 构造。
 // 每次运行只有一个实例：cli.Main 构造后传给 render、clone 与子命令，
 // 因此它记录的当前行号对整个输出过程都成立。
@@ -48,6 +61,8 @@ type Console struct {
 	width     int       // 终端宽度，探测失败按 80 兜底
 	accent    string    // 本次运行的主色
 	line      int       // 已经写完的行数，Line 据此给出当前行号
+	rainbow   bool      // 主色是否改用彩虹渐变
+	rainbowOS float64   // 彩虹起始偏移，随机挑选让每次运行的配色不同
 	transform Transform // 写出前的统一加工，nil 表示原样输出
 }
 
@@ -62,6 +77,8 @@ func New() *Console {
 		width:     widthOf(os.Stdout),
 		accent:    Palette[rand.IntN(len(Palette))],
 	}
+	c.rainbow = rand.Float64() < rainbowChance
+	c.rainbowOS = rand.Float64() * 100
 	c.transform = c.defaultTransform
 	return c
 }
@@ -99,8 +116,11 @@ func (c *Console) Refresh() {
 // SetWidth 直接覆盖终端宽度，供无法探测或需要固定布局的场景使用。
 func (c *Console) SetWidth(width int) { c.width = width }
 
-// SetAccent 替换本次运行的主色，可在运行中切换主题。
-func (c *Console) SetAccent(accent string) { c.accent = accent }
+// SetAccent 替换本次运行的主色，可在运行中切换主题；显式指定颜色时关闭彩虹模式。
+func (c *Console) SetAccent(accent string) {
+	c.accent = accent
+	c.rainbow = false
+}
 
 // SetNoColor 设置是否禁用 ANSI 颜色；stdout 与 stderr 共用这一开关。
 func (c *Console) SetNoColor(noColor bool) { c.noColor = noColor }
@@ -123,7 +143,8 @@ func (c *Console) Println(source Source, parts ...string) {
 
 // Paint 按标准输出的颜色能力给文本着色；禁用颜色时原样返回。
 // 整段颜色默认由 transform 负责，这里只用于同一段里需要多种颜色的精细调控。
-// 如果一段文本经过 Paint，输出它时请将来源设为 RawSource
+// 如果一段文本经过 Paint，输出它时请将来源设为 RawSource。
+// 它只认传入的颜色，主色请走 AccentPaint。
 func (c *Console) Paint(color, s string) string {
 	if !c.colorEnabled(c.stdoutTTY) {
 		return s
@@ -131,8 +152,54 @@ func (c *Console) Paint(color, s string) string {
 	return color + s + Reset
 }
 
-// Accent 返回本次运行随机挑选的主色。
+// AccentPaint 用当前主色给整段文本上色；抽中彩虹时改为逐字符渐变。
+// 与 Paint 分开，避免调用方传入的普通颜色被误当成“主色”。
+func (c *Console) AccentPaint(s string) string {
+	if !c.colorEnabled(c.stdoutTTY) {
+		return s
+	}
+	if c.rainbow {
+		return c.rainbowPaint(s)
+	}
+	return c.accent + s + Reset
+}
+
+// rainbowPaint 用 lolcat 的逐字符彩虹画出主色文本。
+// 横向每个字符推进 rainbowFreq rad；纵向按当前行号错开相位，
+// 所以相邻行的颜色不同，看上去是斜向流动而不是清一色的横向渐变。
+// lol 的选项只填写 String 实际读取的字段
+func (c *Console) rainbowPaint(s string) string {
+	o := lol.Options{
+		Freq:      rainbowFreq,
+		Spread:    rainbowSpread,
+		OS:        c.rainbowOS + float64(c.line)*rainbowPhaseStep,
+		Truecolor: lol.DetectMode(os.Getenv("COLORTERM")) == lol.ModeTrueColor,
+	}
+	return lol.String(s, o)
+}
+
+// Accent 返回本次运行挑中的主色。抽中彩虹时它是兜底的单色，
+// 需要主色效果的地方请用 AccentPaint。
 func (c *Console) Accent() string { return c.accent }
+
+// LabelPaint 画仪表盘的行标签。
+func (c *Console) LabelPaint(s string) string {
+	if !c.colorEnabled(c.stdoutTTY) {
+		return s
+	}
+	return DarkGray + s + Reset
+}
+
+// ValuePaint 画仪表盘的行内容：普通运行白色，抽中彩虹时跟随主色。
+func (c *Console) ValuePaint(s string) string {
+	if !c.colorEnabled(c.stdoutTTY) {
+		return s
+	}
+	if c.rainbow {
+		return c.rainbowPaint(s)
+	}
+	return White + s + Reset
+}
 
 // IsTerminal 表示标准输出是否是真实终端。
 func (c *Console) IsTerminal() bool { return c.stdoutTTY }
@@ -190,12 +257,16 @@ func (c *Console) defaultTransform(source Source, text string) string {
 			return Red + text + Reset
 		}
 	case SourceBanner, SourceGreeting, SourceRecent, SourceClone:
-		return c.Paint(c.accent, text)
+		return c.AccentPaint(text)
 	case SourceOnProject:
 		return c.Paint(White, text)
 	case SourceRule:
 		return c.Paint(DarkGray, text)
 	case SourceQuote:
+		// 普通运行保持绿色；抽中彩虹时跟随主色，和 logo、问候语统一。
+		if c.rainbow {
+			return c.AccentPaint(text)
+		}
 		return c.Paint(Green, text)
 	case SourceWarning:
 		return c.Paint(Yellow, text)

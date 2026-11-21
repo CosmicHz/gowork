@@ -7,8 +7,8 @@
 
 - 跨 Windows / macOS / Linux（含 WSL）的项目跳板 + 环境仪表盘。
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
-- 只有三个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）
-  与 `github.com/spf13/pflag`（命令行解析）。
+- 只有四个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）、
+  `github.com/spf13/pflag`（命令行解析）与 `github.com/0magnet/lolcat-go`（彩虹主色）。
 - 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`cli`、`config`、`console`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
 - shell 侧只有一层壳：`gowork init <shell>` 打印函数代码（zsh 还带补全），用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
@@ -84,12 +84,25 @@ transform 是通用钩子，
 样式、转义、过滤或记录都可以放在这里；内置实现目前只做整段着色，分工按“整段是否同色”
 划分：`error` → 红（按 stderr 的 tty）、`banner` / `greeting` / `recent` / `clone` → 主色、
 `project` → 白、`rule` → 暗灰、`quote` → 绿、`warning` → 黄；纯空白行跳过。
+抽中彩虹时，`quote` 与仪表盘的行内容会跟随主色；行标签始终暗灰（`LabelPaint`），
+内容走 `ValuePaint`，调用方不需要判断当前是不是彩虹模式。低磁盘的红色警告是语义色，
+不参与彩虹。
 `SourceRaw` 用于两类文本：强制不能改动的 `init` / `complete` 输出，以及调用方已经用
 `Paint` 自行上色的混色行（明细行、最近活跃条目、克隆地址 / 目标行）。`write` 见到它就
 直接写出、不调用 transform。自行上色应尽量避免：能拆成整段同色的部分都交给 transform，
 只有同一行里确实需要多种颜色时才用 `Paint` + `SourceRaw`。
 `SourceDefault` 用于没有语义归属、但也不需要强制纯文本的输出（目前只有结构空行），
 transform 照常执行；它不替代任何已有语义来源，也应尽量少用。`help` 当前不做处理。
+主色有一定的概率换成彩虹：需要主色效果时用 `AccentPaint`（抽中彩虹就交给 `lolcat-go`
+逐字符上色，否则整段单色），`Paint` 只按调用方传入的颜色上色、不认主色；
+`SetAccent` 显式指定颜色会关掉彩虹模式。横向速度由 `rainbowFreq` / `rainbowSpread`
+控制（约 31 个字符一轮），`rainbowPhaseStep` 让相邻两段纵向错开相位，避免所有行
+共用同一条横向渐变。`rainbowOS` 是整次运行共用的起始偏移（相当于 lolcat 的 seed），
+纵向相位取当前行号；因此同一行的所有彩色片段颜色一致，换行后才会变化。
+**彩色文本必须一次一行**：一次调用写多行时，`lol.String` 内部每行只把偏移 +1
+（相当于 0.2 rad），不会走 `rainbowPhaseStep`；需要多行就拆成多次调用。
+**必须用 `AccentPaint` 表达主色，不要写 `Paint(con.Accent(), ...)`**：后者拿不到彩虹，
+也绕开了主色语义；render 里的行优先用 `rowAccent`。
 `SetTransform` 可以整体替换内置实现，传 `nil` 即关闭加工。
 `Source` 按语义分得比模块更细，`Print` / `Println` / `Writer` 每次调用都显式带上来源，
 因此可以在同一段里临时换标签：`default`、`banner`、`project`、`greeting`、`recent`、
@@ -184,7 +197,8 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 ### 仪表盘
 
 - `render.New(o, con)`：宽度、主色与颜色能力都来自 `console.Console`（tty && 未传
-  `--no-color` && `NO_COLOR` 为空）；accent 在构造 Console 时从青/绿/黄/紫随机选。
+  `--no-color` && `NO_COLOR` 为空）；accent 在构造 Console 时从青/绿/黄/紫随机选，
+  另有一定概率改用彩虹渐变（见「控制台输出」）。
   renderer 不缓存宽度，每次 `Render` 先 `con.Refresh()` 再按当前宽度排版。
   默认渲染配置由 `render.DefaultOptions()` 提供，数值默认直接引用 `config.Default*` /
   `config.Min*`，不要再在 render 里复制一份。调用方从 `DefaultOptions()` 起步再覆盖字段；
@@ -364,6 +378,8 @@ go test ./...
   对 `Print` / `Println` / `Writer` 的统一加工、`TestRawSourceBypassesTransform` 钉住
   `SourceRaw` 连自定义 transform 都不调用、默认 transform 按来源给整段同色的输出上色，
   `TestLineTracksOutput` 钉住 `Line()` 随输出换行推进、清屏后归零，
+  `TestRainbowAccent` 钉住彩虹主色的逐字符上色与退出条件，
+  `TestLabelPaint` / `TestValuePaint` 钉住行标签保持暗灰、行内容跟随主色，
   以及清屏 / 窗口标题只在 tty 下写出且绕过 transform。
   `internal/render/render_test.go` 的 `TestRenderTagsOutputSources` 钉住仪表盘各段
   （default / banner / project / rule / greeting / recent / quote / warning / clone）

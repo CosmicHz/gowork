@@ -167,28 +167,29 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 	r.println(console.SourceGreeting, r.indent+greeting(now))
 	r.println(console.SourceDefault)
 
-	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"), console.White)
-	r.row("位置", target, console.White)
-	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)), console.White)
+	r.row("时间", now.Format("2006-01-02")+"  "+weekdayZH(now)+"  "+now.Format("15:04:05"))
+	r.row("位置", target)
+	r.row("项目", fmt.Sprintf("%d 个项目", len(projects)))
 
 	if r.showDisk {
 		if d, ok := sysinfo.DiskUsage(target); ok {
-			color := console.White
 			if d.FreeGB < r.diskWarnGB {
-				color = console.Red
+				// 低空间是警告，保持红色，不参与彩虹。
+				r.rowColor("可用空间", diskText(d), console.Red)
+			} else {
+				r.row("可用空间", diskText(d))
 			}
-			r.row("可用空间", diskText(d), color)
 		}
 	}
 
 	if r.showGit {
 		if branch, changes, ok := project.GitInfo(target); ok {
-			r.row("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes), r.con.Accent())
+			r.rowAccent("Git", fmt.Sprintf("%s  ·  %d 项未提交", branch, changes))
 		}
 	}
 
 	if r.showHoliday {
-		r.row("节日", holiday.Line(holiday.Next(now), now), console.White)
+		r.row("节日", holiday.Line(holiday.Next(now), now))
 	}
 
 	if r.showRecent {
@@ -235,8 +236,8 @@ func (r *Renderer) CloneNotice(url, dest string) {
 	}
 	r.println(console.SourceDefault)
 	r.println(console.SourceClone, r.indent+"正在克隆仓库")
-	r.row("地址", url, console.White)
-	r.row("目标", dest, console.White)
+	r.row("地址", url)
+	r.row("目标", dest)
 	r.println(console.SourceDefault)
 }
 
@@ -256,19 +257,34 @@ func (r *Renderer) rule() {
 	r.println(console.SourceRule, r.indent+strings.Repeat("─", n))
 }
 
-// row 输出一行「标签 + 值」，标签按终端视觉宽度对齐到 rowLabelWidth。
-// 行内混有多种颜色，由 Paint 精细调控，因此按 SourceRaw 直接写出、不经过 transform。
-func (r *Renderer) row(label, value, valueColor string) {
+// row 输出一行「标签 + 内容」，内容使用普通配色（抽中彩虹时跟随主色）。
+func (r *Renderer) row(label, value string) {
+	r.rowPaint(label, value, r.con.ValuePaint)
+}
+
+// rowColor 与 row 相同，但内容用指定的固定颜色，用于红色警告等语义色。
+func (r *Renderer) rowColor(label, value, valueColor string) {
+	r.rowPaint(label, value, func(s string) string { return r.con.Paint(valueColor, s) })
+}
+
+// rowAccent 与 row 相同，但内容用当前主色，抽中彩虹时逐字符上色。
+func (r *Renderer) rowAccent(label, value string) {
+	r.rowPaint(label, value, r.con.AccentPaint)
+}
+
+// rowPaint 把标签按终端视觉宽度对齐到 rowLabelWidth，再用 paint 给内容上色。
+// 行内混有多种颜色，因此不经过控制台的输出前处理函数。
+func (r *Renderer) rowPaint(label, value string, paint func(string) string) {
 	pad := rowLabelWidth - displayWidth(label)
 	if pad < 0 {
 		pad = 0
 	}
-	r.println(console.SourceRaw,
+	r.println(console.SourceRaw,  // SourceRaw 要求控制台原样输出
 		r.indent+
-			r.con.Paint(r.con.Accent(), "   ")+
-			r.con.Paint(console.DarkGray, label)+
+			r.con.AccentPaint("   ")+
+			r.con.LabelPaint(label)+
 			strings.Repeat(" ", pad)+
-			r.con.Paint(valueColor, value))
+			paint(value))
 }
 
 func (r *Renderer) printRecent(projects []project.Project) {

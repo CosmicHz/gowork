@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -184,6 +185,97 @@ func TestDefaultTransformColorsUniformSources(t *testing.T) {
 	redirected := NewWith(io.Discard, io.Discard, true, false)
 	if got := redirected.defaultTransform(SourceError, "错"); got != "错" {
 		t.Errorf("stderr 非终端时不该着色，得到 %q", got)
+	}
+}
+
+// TestRainbowAccent 钉住小概率彩虹主色：抽中时 AccentPaint 逐字符上色；
+// Paint 只认调用方给的颜色，即使传的正好是主色也不会变成彩虹；
+// 禁用颜色或显式设置主色后回到普通行为。
+func TestRainbowAccent(t *testing.T) {
+	clearNoColor(t)
+	con := NewWith(io.Discard, io.Discard, true, true)
+	con.rainbow = true
+	con.rainbowOS = 0
+
+	if got := con.AccentPaint("ab"); !strings.Contains(got, "\x1b[38;") {
+		t.Errorf("彩虹主色应逐字符上色，得到 %q", got)
+	}
+	// 同一行的所有彩色片段共用 seed 与行号相位，颜色必须一致。
+	first := con.AccentPaint("ab")
+	if again := con.AccentPaint("ab"); again != first {
+		t.Errorf("同一行应共用相位，得到 %q 与 %q", first, again)
+	}
+	if value := con.ValuePaint("ab"); value != first {
+		t.Errorf("行内容与主色在同一行应共用相位，得到 %q 与 %q", first, value)
+	}
+
+	// 纵向相位按当前行号错开，写完一行后颜色才会变化。
+	con.Println(SourceDefault, "换行")
+	if second := con.AccentPaint("ab"); first == second {
+		t.Errorf("换行后的下一段应错开相位，输出却相同：%q", first)
+	}
+	if got, want := con.Paint(con.Accent(), "ab"), con.Accent()+"ab"+Reset; got != want {
+		t.Errorf("Paint 不该因为颜色等于主色就上彩虹，得到 %q，想要 %q", got, want)
+	}
+	if got := con.Paint(Red, "错"); got != Red+"错"+Reset {
+		t.Errorf("固定颜色不该被彩虹影响，得到 %q", got)
+	}
+	if got := con.defaultTransform(SourceQuote, "格言"); !strings.Contains(got, "\x1b[38;") {
+		t.Errorf("彩虹模式下格言应跟随主色，得到 %q", got)
+	}
+
+	con.SetNoColor(true)
+	if got := con.AccentPaint("ab"); got != "ab" {
+		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
+	}
+
+	con.SetNoColor(false)
+	con.SetAccent(Cyan)
+	if got := con.Accent(); got != Cyan {
+		t.Errorf("显式设置主色后应退出彩虹模式，得到 %q", got)
+	}
+	if got := con.AccentPaint("ab"); got != Cyan+"ab"+Reset {
+		t.Errorf("退出彩虹模式后应恢复整段单色，得到 %q", got)
+	}
+}
+
+// TestLabelPaint 钉住行标签始终暗灰，抽中彩虹也不跟随。
+func TestLabelPaint(t *testing.T) {
+	clearNoColor(t)
+	con := NewWith(io.Discard, io.Discard, true, true)
+
+	if got, want := con.LabelPaint("时间"), DarkGray+"时间"+Reset; got != want {
+		t.Errorf("普通运行标签应暗灰，得到 %q，想要 %q", got, want)
+	}
+
+	con.rainbow = true
+	if got, want := con.LabelPaint("时间"), DarkGray+"时间"+Reset; got != want {
+		t.Errorf("彩虹模式下标签也应保持暗灰，得到 %q，想要 %q", got, want)
+	}
+
+	con.SetNoColor(true)
+	if got := con.LabelPaint("时间"); got != "时间" {
+		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
+	}
+}
+
+// TestValuePaint 钉住行内容：普通运行白色，抽中彩虹时跟随主色。
+func TestValuePaint(t *testing.T) {
+	clearNoColor(t)
+	con := NewWith(io.Discard, io.Discard, true, true)
+
+	if got, want := con.ValuePaint("99"), White+"99"+Reset; got != want {
+		t.Errorf("普通运行内容应白色，得到 %q，想要 %q", got, want)
+	}
+
+	con.rainbow = true
+	if got := con.ValuePaint("99"); !strings.Contains(got, "\x1b[38;") {
+		t.Errorf("彩虹模式下内容应跟随主色，得到 %q", got)
+	}
+
+	con.SetNoColor(true)
+	if got := con.ValuePaint("99"); got != "99" {
+		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
 	}
 }
 

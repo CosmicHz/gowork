@@ -1,3 +1,5 @@
+github.com/0magnet/lolcat-go v0.0.0 h1:mtqgONjoVF3D2naY806IL1QX2V+0QD+U3RYQvAJ4+IE=
+github.com/0magnet/lolcat-go v0.0.0/go.mod h1:DbbClVrvQ558CvwGWU78xx0k03aEY/uS9qf5Wtw+n3o=
 github.com/spf13/pflag v1.1.0 h1:6W6MbVUrnMb8PEhjkqwsVLY7ryuzRfFHF4mQd7L94ag=
 github.com/spf13/pflag v1.1.0/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
 golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
