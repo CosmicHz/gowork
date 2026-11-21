@@ -186,14 +186,14 @@ func TestRenderUsesLiveConsoleWidth(t *testing.T) {
 	r.showHoliday = false
 	r.showRecent = false
 
-	r.con.SetWidth(40)
+	r.con.Width = 40
 	r.Render("/ws", nil, nil)
 	if got := out.String(); !strings.Contains(got, strings.Repeat("─", 34)) {
 		t.Errorf("宽度 40 时应画 34 列分隔线：\n%s", got)
 	}
 
 	out.Reset()
-	r.con.SetWidth(60)
+	r.con.Width = 60
 	r.Render("/ws", nil, nil)
 	if got := out.String(); !strings.Contains(got, strings.Repeat("─", 54)) {
 		t.Errorf("宽度热更新为 60 后应画 54 列分隔线：\n%s", got)
@@ -209,10 +209,10 @@ func TestRenderTagsOutputSources(t *testing.T) {
 	r.showHoliday = false
 
 	seen := map[console.Source]bool{}
-	r.con.SetTransform(func(source console.Source, s string) string {
+	r.con.Transform = func(source console.Source, s string) string {
 		seen[source] = true
 		return s
-	})
+	}
 
 	projects := []project.Project{{Name: "alpha", Mod: time.Now()}}
 	r.Render("/ws/alpha", projects, []project.Warning{{Message: "注意", Details: []string{"细节"}}})

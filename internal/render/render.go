@@ -148,7 +148,7 @@ func (r *Renderer) Render(target string, projects []project.Project, warnings []
 		logo := r.indent + line
 		if name != "" && i == len(art)-2 {
 			need := len(r.indent) + displayWidth(line) + bannerSuffixGap + displayWidth(name)
-			if need <= r.con.Width() {
+			if need <= r.con.Width {
 				// logo 与项目名后缀是同一条线上的两段样式，分开写出，各自由来源着色。
 				r.con.Print(console.SourceBanner, logo)
 				r.con.Print(console.SourceOnProject, strings.Repeat(" ", bannerSuffixGap)+name)
@@ -253,7 +253,7 @@ func (r *Renderer) setTitle(title string) {
 
 // rule 画分隔线。只限上界：超宽终端下拉满整行会很难看；下界不设，
 func (r *Renderer) rule() {
-	n := max(0, min(r.con.Width(), maxRuleWidth)-len(r.indent)*2)
+	n := max(0, min(r.con.Width, maxRuleWidth)-len(r.indent)*2)
 	r.println(console.SourceRule, r.indent+strings.Repeat("─", n))
 }
 
@@ -279,7 +279,7 @@ func (r *Renderer) rowPaint(label, value string, paint func(string) string) {
 	if pad < 0 {
 		pad = 0
 	}
-	r.println(console.SourceRaw,  // SourceRaw 要求控制台原样输出
+	r.println(console.SourceRaw, // SourceRaw 要求控制台原样输出
 		r.indent+
 			r.con.AccentPaint("   ")+
 			r.con.LabelPaint(label)+

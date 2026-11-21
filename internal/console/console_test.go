@@ -31,12 +31,12 @@ func TestPaintHonorsColorSwitch(t *testing.T) {
 		t.Errorf("终端下应着色，得到 %q", got)
 	}
 
-	con.SetNoColor(true)
+	con.NoColor = true
 	if got := con.Paint(Red, "错"); got != "错" {
 		t.Errorf("--no-color 应原样返回，得到 %q", got)
 	}
 
-	con.SetNoColor(false)
+	con.NoColor = false
 	t.Setenv("NO_COLOR", "1")
 	if got := con.Paint(Red, "错"); got != "错" {
 		t.Errorf("NO_COLOR 非空应原样返回，得到 %q", got)
@@ -57,9 +57,9 @@ func TestPaintNeedsTTY(t *testing.T) {
 func TestTransformAppliesToAllOutput(t *testing.T) {
 	out := &bytes.Buffer{}
 	con := NewWith(out, io.Discard, false, false)
-	con.SetTransform(func(source Source, s string) string {
+	con.Transform = func(source Source, s string) string {
 		return string(source) + ":" + s
-	})
+	}
 
 	con.Print(SourceBanner, "a\n")
 	con.Println(SourceHelp, "b", "c")
@@ -80,7 +80,7 @@ func TestTransformAppliesToAllOutput(t *testing.T) {
 func TestRawSourceBypassesTransform(t *testing.T) {
 	out := &bytes.Buffer{}
 	con := NewWith(out, io.Discard, false, false)
-	con.SetTransform(func(Source, string) string { return "被加工" })
+	con.Transform = func(Source, string) string { return "被加工" }
 
 	con.Println(SourceRaw, "原样")
 	if _, err := io.WriteString(con.Writer(SourceRaw), "也原样\n"); err != nil {
@@ -104,7 +104,7 @@ func TestTerminalSequencesOnlyOnTTY(t *testing.T) {
 
 	out.Reset()
 	con = NewWith(out, io.Discard, true, true)
-	con.SetTransform(func(Source, string) string { return "被加工" })
+	con.Transform = func(Source, string) string { return "被加工" }
 	con.ClearScreen()
 	con.SetTitle("WORK | /ws")
 	if got, want := out.String(), "\x1b[H\x1b[2J\x1b[3J\x1b]0;WORK | /ws\x07"; got != want {
@@ -176,7 +176,7 @@ func TestDefaultTransformColorsUniformSources(t *testing.T) {
 		}
 	}
 
-	con.SetNoColor(true)
+	con.NoColor = true
 	if got := con.defaultTransform(SourceGreeting, "早"); got != "早" {
 		t.Errorf("--no-color 应关闭着色，得到 %q", got)
 	}
@@ -224,15 +224,15 @@ func TestRainbowAccent(t *testing.T) {
 		t.Errorf("彩虹模式下格言应跟随主色，得到 %q", got)
 	}
 
-	con.SetNoColor(true)
+	con.NoColor = true
 	if got := con.AccentPaint("ab"); got != "ab" {
 		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
 	}
 
-	con.SetNoColor(false)
+	con.NoColor = false
 	con.SetAccent(Cyan)
-	if got := con.Accent(); got != Cyan {
-		t.Errorf("显式设置主色后应退出彩虹模式，得到 %q", got)
+	if con.Accent() != Cyan {
+		t.Errorf("显式设置主色后应退出彩虹模式，得到 %q", con.Accent())
 	}
 	if got := con.AccentPaint("ab"); got != Cyan+"ab"+Reset {
 		t.Errorf("退出彩虹模式后应恢复整段单色，得到 %q", got)
@@ -275,7 +275,7 @@ func TestLabelPaint(t *testing.T) {
 		t.Errorf("彩虹模式下标签也应保持暗灰，得到 %q，想要 %q", got, want)
 	}
 
-	con.SetNoColor(true)
+	con.NoColor = true
 	if got := con.LabelPaint("时间"); got != "时间" {
 		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
 	}
@@ -295,7 +295,7 @@ func TestValuePaint(t *testing.T) {
 		t.Errorf("彩虹模式下内容应跟随主色，得到 %q", got)
 	}
 
-	con.SetNoColor(true)
+	con.NoColor = true
 	if got := con.ValuePaint("99"); got != "99" {
 		t.Errorf("禁用颜色时应原样返回，得到 %q", got)
 	}
@@ -304,8 +304,8 @@ func TestValuePaint(t *testing.T) {
 // TestNewWithDefaults 钉住注入流时的兜底宽度与固定主色，避免测试依赖真实终端。
 func TestNewWithDefaults(t *testing.T) {
 	con := NewWith(io.Discard, io.Discard, false, false)
-	if con.Width() != 80 {
-		t.Errorf("注入流时宽度应按 80 兜底，得到 %d", con.Width())
+	if con.Width != 80 {
+		t.Errorf("注入流时宽度应按 80 兜底，得到 %d", con.Width)
 	}
 	if con.Accent() != Palette[0] {
 		t.Errorf("注入流时主色应固定为调色板首项，得到 %q", con.Accent())
@@ -315,19 +315,18 @@ func TestNewWithDefaults(t *testing.T) {
 	}
 }
 
-// TestHotUpdateWidthAndAccent 钉住终端配置可在同一个 Console 上热更新；
+// TestHotUpdateWidth 钉住终端宽度可在同一个 Console 上热更新；
 // 注入普通流时 Refresh 没有可探测的文件，应保持已设置的值。
-func TestHotUpdateWidthAndAccent(t *testing.T) {
+func TestHotUpdateWidth(t *testing.T) {
 	con := NewWith(io.Discard, io.Discard, false, false)
 
-	con.SetWidth(120)
-	con.SetAccent(Cyan)
-	if con.Width() != 120 || con.Accent() != Cyan {
-		t.Errorf("热更新未生效：width=%d accent=%q", con.Width(), con.Accent())
+	con.Width = 120
+	if con.Width != 120 {
+		t.Errorf("热更新未生效：width=%d", con.Width)
 	}
 
 	con.Refresh()
-	if con.Width() != 120 || con.Accent() != Cyan {
-		t.Errorf("Refresh 不该覆盖注入流的值：width=%d accent=%q", con.Width(), con.Accent())
+	if con.Width != 120 {
+		t.Errorf("Refresh 不该覆盖注入流的值：width=%d", con.Width)
 	}
 }

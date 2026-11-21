@@ -73,8 +73,9 @@ install_test.sh            安装脚本的配置命令识别、替换与去重�
 
 所有控制台通信都走 `internal/console`：仪表盘、帮助、`init` / `complete` 的输出、错误
 与 `git clone` 的终端接管都必须经 `Console`，不要在别处直接写 `os.Stdout` / `os.Stderr`。
-`Console` 持有两个流与各自的 tty 判定、颜色开关、宽度与主色，并通过
-`SetTransform(func(Source, string) string)` 在写出前加工文本。每次运行只有一个实例
+`Console` 持有两个流与各自的 tty 判定、颜色开关、宽度与主色。`NoColor` / `Width` /
+`Transform` 是可直接赋值的配置字段（`Transform` 传 `nil` 即关闭加工），其余运行时状态
+（tty 判定、行号、彩虹相位）保持私有，由方法维护。每次运行只有一个实例
 （`cli.Main` 构造后传给 render、clone 与子命令），`write` 是行号的唯一更新点：
 按写出的换行数维护 `line`，`Line()` 返回下一条输出所在的行号（1 起），
 `ClearScreen` 会把它归零（输出被重定向时也一样）。**只允许存在一个 `Console` 实例**：
@@ -97,7 +98,7 @@ transform 照常执行；它不替代任何已有语义来源，也应尽量少�
 逐字符上色，否则整段单色），`Paint` 只按调用方传入的颜色上色、不认主色；
 `SetAccent` 显式指定颜色会关掉彩虹模式。概率与推进速度来自 `config.json` 的
 `rainbow_chance` / `rainbow_freq` / `rainbow_spread` / `rainbow_phase_step`
-（默认 0.05 / 0.2 / 1.0 / 2.0），由 `cli.Run` 在构造 Console 之后用 `SetRainbow`
+（默认 0.05 / 0.2 / 1.0 / 2.0），由 `cli.Main` 在解析完配置后用 `SetRainbow`
 覆盖（`console.RainbowOptions`，默认值引用 `config.DefaultRainbow*`）。
 横向速度按 `rainbow_freq` / `rainbow_spread` 控制（约 31 个字符一轮），
 `rainbow_phase_step` 让相邻两段纵向错开相位，避免所有行
@@ -107,13 +108,13 @@ transform 照常执行；它不替代任何已有语义来源，也应尽量少�
 （相当于 0.2 rad），不会走 `rainbow_phase_step`；需要多行就拆成多次调用。
 **必须用 `AccentPaint` 表达主色，不要写 `Paint(con.Accent(), ...)`**：后者拿不到彩虹，
 也绕开了主色语义；render 里的行优先用 `rowAccent`。
-`SetTransform` 可以整体替换内置实现，传 `nil` 即关闭加工。
+`Transform` 可直接整体替换内置实现，传 `nil` 即关闭加工。
 `Source` 按语义分得比模块更细，`Print` / `Println` / `Writer` 每次调用都显式带上来源，
 因此可以在同一段里临时换标签：`default`、`banner`、`project`、`greeting`、`recent`、
 `quote`、`rule`、`warning`、`clone`、`help`、`raw`、`error`。清屏与窗口标题等控制
 序列直接写出，不经过 transform。`Attach` 把 git 子进程直接接到控制台。
-终端配置支持热更新：`SetNoColor` / `SetTransform` / `SetAccent` / `SetWidth` 可在同一个
-实例上随时改；`Refresh` 重新探测 tty 与宽度（`Render` 每次输出前都会调用一次），
+终端配置支持热更新：`NoColor` / `Width` / `Transform` 直接赋值，`SetRainbow` 重新抽取彩虹，
+`Refresh` 重新探测 tty 与宽度（`Render` 每次输出前都会调用一次），
 所以窗口大小变化后不需要重建 Console。`sysinfo.ColorEnabled` 仍是唯一的颜色判定。
 测试用 `console.NewWith` 注入 `bytes.Buffer`，不要依赖真实终端。
 
@@ -380,11 +381,12 @@ go test ./...
   - `TestListFollowsJunction`（仅 Windows）固定用 `mklink /J`，
     保证符号链接用例因权限跳过时，「链接指向目录算项目」仍然有覆盖。
 - `internal/sysinfo/sysinfo_test.go` 的 `TestColorEnabled` 钉住颜色开关的三个条件。
-- `internal/console/console_test.go`：`Paint` 的三种颜色开关、带来源标识的 `SetTransform`
+- `internal/console/console_test.go`：`Paint` 的三种颜色开关、带来源标识的 `Transform`
   对 `Print` / `Println` / `Writer` 的统一加工、`TestRawSourceBypassesTransform` 钉住
   `SourceRaw` 连自定义 transform 都不调用、默认 transform 按来源给整段同色的输出上色，
   `TestLineTracksOutput` 钉住 `Line()` 随输出换行推进、清屏后归零，
-  `TestRainbowAccent` 钉住彩虹主色的逐字符上色与退出条件，
+  `TestRainbowAccent` 钉住彩虹主色的逐字符上色与同一行共用相位，
+  `TestSetRainbow` 钉住配置里的概率能启用或关闭彩虹，
   `TestLabelPaint` / `TestValuePaint` 钉住行标签保持暗灰、行内容跟随主色，
   以及清屏 / 窗口标题只在 tty 下写出且绕过 transform。
   `internal/render/render_test.go` 的 `TestRenderTagsOutputSources` 钉住仪表盘各段

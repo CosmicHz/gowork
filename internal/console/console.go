@@ -61,18 +61,20 @@ func defaultRainbow() RainbowOptions {
 // 每次运行只有一个实例：cli.Main 构造后传给 render、clone 与子命令，
 // 因此它记录的当前行号对整个输出过程都成立。
 type Console struct {
+	// 渲染前可直接赋值的配置字段：都是普通值，没有额外副作用。
+	NoColor   bool      // 是否禁用 ANSI 颜色（--no-color / 配置项）
+	Width     int       // 终端宽度，探测失败按 80 兜底
+	Transform Transform // 写出前的统一加工，nil 表示原样输出
+
 	stdout      io.Writer      // 标准输出流，仪表盘、帮助与子命令输出都写这里
 	stderr      io.Writer      // 标准错误流，只用于错误信息
 	stdoutTTY   bool           // stdout 是否为真实终端，决定清屏、标题与着色
 	stderrTTY   bool           // stderr 是否为真实终端，单独决定错误信息是否着色
-	noColor     bool           // 是否禁用颜色（--no-color / 配置项）
-	width       int            // 终端宽度，探测失败按 80 兜底
 	accent      string         // 本次运行的主色
-	line        int            // 已经写完的行数，Line 据此给出当前行号
+	line        int            // 已经写完的行数，彩虹的纵向相位据此计算
 	rainbow     bool           // 主色是否改用彩虹渐变
 	rainbowOS   float64        // 彩虹起始偏移，随机挑选让每次运行的配色不同
 	rainbowOpts RainbowOptions // 彩虹的概率与推进速度等相关选项
-	transform   Transform      // 写出前的统一加工，nil 表示原样输出
 }
 
 // New 绑定标准输出与标准错误，并开启 Windows 控制台的 ANSI 解析与 UTF-8 代码页。
@@ -83,13 +85,13 @@ func New() *Console {
 		stderr:    os.Stderr,
 		stdoutTTY: term.IsTerminal(int(os.Stdout.Fd())),
 		stderrTTY: term.IsTerminal(int(os.Stderr.Fd())),
-		width:     widthOf(os.Stdout),
+		Width:     widthOf(os.Stdout),
 		accent:    Palette[rand.IntN(len(Palette))],
 	}
 	c.rainbowOpts = defaultRainbow()
 	c.rainbow = rand.Float64() < c.rainbowOpts.Chance
 	c.rainbowOS = rand.Float64() * 100
-	c.transform = c.defaultTransform
+	c.Transform = c.defaultTransform
 	return c
 }
 
@@ -101,14 +103,14 @@ func NewWith(stdout, stderr io.Writer, stdoutTTY, stderrTTY bool) *Console {
 		stderr:    stderr,
 		stdoutTTY: stdoutTTY,
 		stderrTTY: stderrTTY,
-		width:     80,
+		Width:     80,
 		accent:    Palette[0],
 	}
 	c.rainbowOpts = defaultRainbow()
 	if f := fileOf(stdout); f != nil {
-		c.width = widthOf(f)
+		c.Width = widthOf(f)
 	}
-	c.transform = c.defaultTransform
+	c.Transform = c.defaultTransform
 	return c
 }
 
@@ -117,35 +119,26 @@ func NewWith(stdout, stderr io.Writer, stdoutTTY, stderrTTY bool) *Console {
 func (c *Console) Refresh() {
 	if f := fileOf(c.stdout); f != nil {
 		c.stdoutTTY = term.IsTerminal(int(f.Fd()))
-		c.width = widthOf(f)
+		c.Width = widthOf(f)
 	}
 	if f := fileOf(c.stderr); f != nil {
 		c.stderrTTY = term.IsTerminal(int(f.Fd()))
 	}
 }
 
-// SetWidth 直接覆盖终端宽度，供无法探测或需要固定布局的场景使用。
-func (c *Console) SetWidth(width int) { c.width = width }
-
-// SetAccent 替换本次运行的主色，可在运行中切换主题；显式指定颜色时关闭彩虹模式。
+// SetAccent 替换本次运行的主色；显式指定颜色时关闭彩虹模式。
 func (c *Console) SetAccent(accent string) {
 	c.accent = accent
 	c.rainbow = false
 }
 
 // SetRainbow 替换彩虹参数，并按新的概率重新抽取本次是否启用。
-// 配置文件在 Console 构造之后才读到，所以由调用方在这里覆盖；
-// 之后再调用 SetAccent 仍会关闭彩虹。
+// 配置文件在 Console 构造之后才读到，所以由调用方在这里覆盖。由配置决定，
+// 概率为 0 时关闭彩虹。
 func (c *Console) SetRainbow(opts RainbowOptions) {
 	c.rainbowOpts = opts
 	c.rainbow = rand.Float64() < opts.Chance
 }
-
-// SetNoColor 设置是否禁用 ANSI 颜色；stdout 与 stderr 共用这一开关。
-func (c *Console) SetNoColor(noColor bool) { c.noColor = noColor }
-
-// SetTransform 替换写出前的统一加工；传 nil 表示关闭加工（默认加工也会停用）。
-func (c *Console) SetTransform(fn Transform) { c.transform = fn }
 
 // Writer 返回标准输出的写入器，写出前会经过统一加工，并带上来源标识。
 func (c *Console) Writer(source Source) io.Writer { return writer{c, source} }
@@ -197,10 +190,6 @@ func (c *Console) rainbowPaint(s string) string {
 	return lol.String(s, o)
 }
 
-// Accent 返回本次运行挑中的主色。抽中彩虹时它是兜底的单色，
-// 需要主色效果的地方请用 AccentPaint。
-func (c *Console) Accent() string { return c.accent }
-
 // LabelPaint 画仪表盘的行标签。
 func (c *Console) LabelPaint(s string) string {
 	if !c.colorEnabled(c.stdoutTTY) {
@@ -220,11 +209,12 @@ func (c *Console) ValuePaint(s string) string {
 	return White + s + Reset
 }
 
+// Accent 返回本次运行挑中的主色。抽中彩虹时它是兜底的单色，
+// 需要主色效果的地方请用 AccentPaint。
+func (c *Console) Accent() string { return c.accent }
+
 // IsTerminal 表示标准输出是否是真实终端。
 func (c *Console) IsTerminal() bool { return c.stdoutTTY }
-
-// Width 返回构造时探测到的终端宽度。
-func (c *Console) Width() int { return c.width }
 
 // Line 返回下一条输出所在的行号，从 1 开始；清屏后回到 1。
 // 行号按已经写出的换行数计算，供需要纵向坐标的输出使用。
@@ -295,15 +285,15 @@ func (c *Console) defaultTransform(source Source, text string) string {
 
 // colorEnabled 是颜色开关的唯一判定：该流是真实终端、未传 --no-color、NO_COLOR 为空。
 func (c *Console) colorEnabled(isTTY bool) bool {
-	return sysinfo.ColorEnabled(isTTY, c.noColor)
+	return sysinfo.ColorEnabled(isTTY, c.NoColor)
 }
 
 // write 是所有标准输出/错误写出的终点。SourceRaw 表示文本已由调用方处理完毕，
 // 直接写出、不经过 transform；其余来源统一执行 transform。
 // 这里同时是行号的唯一更新点，所有输出（包括 Writer）都会经过它。
 func (c *Console) write(source Source, w io.Writer, s string) error {
-	if source != SourceRaw && c.transform != nil {
-		s = c.transform(source, s)
+	if source != SourceRaw && c.Transform != nil {
+		s = c.Transform(source, s)
 	}
 	c.line += strings.Count(s, "\n")
 	_, err := io.WriteString(w, s)

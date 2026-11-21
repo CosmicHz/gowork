@@ -400,7 +400,14 @@ func Main(args []string) {
 	// 用 ContinueOnError 自己处理错误：pflag 的 ExitOnError 会把错误打到 stdout。
 	fs := pflag.NewFlagSet(args[0], pflag.ContinueOnError)
 	o, err := parseWith(fs, args[1:], cfg)
-	con.SetNoColor(o.Config.NoColor)
+	// 控制台配置在这里一次应用；Run 只负责解析与渲染。
+	con.NoColor = o.Config.NoColor
+	con.SetRainbow(console.RainbowOptions{
+		Chance:    o.Config.RainbowChance,
+		Freq:      o.Config.RainbowFreq,
+		Spread:    o.Config.RainbowSpread,
+		PhaseStep: o.Config.RainbowPhaseStep,
+	})
 	if err != nil {
 		con.Fail(err, 2)
 	}
@@ -418,15 +425,6 @@ func Main(args []string) {
 
 // Run 解析工作区、定位目标、渲染仪表盘，成功时把目标目录写入 --cwd-file。
 func Run(o Options, cfg config.Config, con *console.Console) error {
-	con.SetNoColor(o.Config.NoColor)
-	// 配置在 Console 构造之后才读到，这里把彩虹参数覆盖到本次运行。
-	con.SetRainbow(console.RainbowOptions{
-		Chance:    o.Config.RainbowChance,
-		Freq:      o.Config.RainbowFreq,
-		Spread:    o.Config.RainbowSpread,
-		PhaseStep: o.Config.RainbowPhaseStep,
-	})
-
 	workspace, err := cfg.ResolveWorkspace(o.Workspace)
 	if err != nil {
 		return err
