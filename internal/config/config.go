@@ -24,37 +24,51 @@ const (
 	DefaultRecentNameWidth = 35
 	MinRecentNameWidth     = 5
 	DefaultDiskWarnGB      = 10
+
+	// 彩虹主色的默认参数；console 构造时也从这里取默认值。
+	DefaultRainbowChance    = 0.05
+	DefaultRainbowFreq      = 0.2
+	DefaultRainbowSpread    = 1.0
+	DefaultRainbowPhaseStep = 2.0
 )
 
 // Config 是从配置文件解析，补好默认值后的运行配置。
 // JSON 里没写的字段采用默认值，否则用填写的值
 type Config struct {
-	Workspace       string   `json:"workspace"`
-	Indent          int      `json:"indent"`
-	NoColor         bool     `json:"no_color"`
-	RecentLimit     int      `json:"recent_limit"`
-	RecentNameWidth int      `json:"recent_name_width"`
-	DiskWarnGB      float64  `json:"disk_warn_gb"`
-	ShowDisk        bool     `json:"show_disk"`
-	ShowGit         bool     `json:"show_git"`
-	ShowHoliday     bool     `json:"show_holiday"`
-	ShowRecent      bool     `json:"show_recent"`
-	ClearScreen     bool     `json:"clear_screen"`
-	Quotes          []string `json:"quotes"`
+	Workspace        string   `json:"workspace"`
+	Indent           int      `json:"indent"`
+	NoColor          bool     `json:"no_color"`
+	RecentLimit      int      `json:"recent_limit"`
+	RecentNameWidth  int      `json:"recent_name_width"`
+	DiskWarnGB       float64  `json:"disk_warn_gb"`
+	ShowDisk         bool     `json:"show_disk"`
+	ShowGit          bool     `json:"show_git"`
+	ShowHoliday      bool     `json:"show_holiday"`
+	ShowRecent       bool     `json:"show_recent"`
+	ClearScreen      bool     `json:"clear_screen"`
+	RainbowChance    float64  `json:"rainbow_chance"`
+	RainbowFreq      float64  `json:"rainbow_freq"`
+	RainbowSpread    float64  `json:"rainbow_spread"`
+	RainbowPhaseStep float64  `json:"rainbow_phase_step"`
+	Quotes           []string `json:"quotes"`
 }
 
 // DefaultConfig 返回默认配置。load 先以它为底稿，再让 JSON 覆盖显式字段。
 func DefaultConfig() Config {
 	return Config{
-		Indent:          DefaultIndent,
-		RecentLimit:     DefaultRecentLimit,
-		RecentNameWidth: DefaultRecentNameWidth,
-		DiskWarnGB:      DefaultDiskWarnGB,
-		ShowDisk:        true,
-		ShowGit:         true,
-		ShowHoliday:     true,
-		ShowRecent:      true,
-		ClearScreen:     true,
+		Indent:           DefaultIndent,
+		RecentLimit:      DefaultRecentLimit,
+		RecentNameWidth:  DefaultRecentNameWidth,
+		DiskWarnGB:       DefaultDiskWarnGB,
+		ShowDisk:         true,
+		ShowGit:          true,
+		ShowHoliday:      true,
+		ShowRecent:       true,
+		ClearScreen:      true,
+		RainbowChance:    DefaultRainbowChance,
+		RainbowFreq:      DefaultRainbowFreq,
+		RainbowSpread:    DefaultRainbowSpread,
+		RainbowPhaseStep: DefaultRainbowPhaseStep,
 	}
 }
 
@@ -101,6 +115,18 @@ func (c Config) Validate() error {
 	}
 	if c.DiskWarnGB < 0 {
 		return fmt.Errorf("disk_warn_gb=%v 不能为负数", c.DiskWarnGB)
+	}
+	if c.RainbowChance < 0 || c.RainbowChance > 1 {
+		return fmt.Errorf("rainbow_chance=%v 必须在 0 到 1 之间", c.RainbowChance)
+	}
+	if c.RainbowFreq < 0 {
+		return fmt.Errorf("rainbow_freq=%v 不能为负数", c.RainbowFreq)
+	}
+	if c.RainbowSpread <= 0 {
+		return fmt.Errorf("rainbow_spread=%v 必须大于 0", c.RainbowSpread)
+	}
+	if c.RainbowPhaseStep < 0 {
+		return fmt.Errorf("rainbow_phase_step=%v 不能为负数", c.RainbowPhaseStep)
 	}
 	for i, q := range c.Quotes {
 		if strings.TrimSpace(q) == "" {

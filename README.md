@@ -295,6 +295,10 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `show_holiday` | `true` | 是否显示「节日」行 |
 | `show_recent` | `true` | 是否显示「最近活跃」 |
 | `clear_screen` | `true` | 是否清屏（仅真实终端） |
+| `rainbow_chance` | `0.05` | 主色换成彩虹的概率（0–1）；`0` 表示不启用 |
+| `rainbow_freq` | `0.2` | 彩虹每列的相位推进（rad），越大变色越快 |
+| `rainbow_spread` | `1.0` | 彩虹相位的横向扩散，必须大于 0 |
+| `rainbow_phase_step` | `2.0` | 相邻输出行之间错开的相位 |
 | `quotes` | 内置格言 | 底部格言的候选数组，随机取一条 |
 
 ```json

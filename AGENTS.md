@@ -95,12 +95,16 @@ transform 是通用钩子，
 transform 照常执行；它不替代任何已有语义来源，也应尽量少用。`help` 当前不做处理。
 主色有一定的概率换成彩虹：需要主色效果时用 `AccentPaint`（抽中彩虹就交给 `lolcat-go`
 逐字符上色，否则整段单色），`Paint` 只按调用方传入的颜色上色、不认主色；
-`SetAccent` 显式指定颜色会关掉彩虹模式。横向速度由 `rainbowFreq` / `rainbowSpread`
-控制（约 31 个字符一轮），`rainbowPhaseStep` 让相邻两段纵向错开相位，避免所有行
+`SetAccent` 显式指定颜色会关掉彩虹模式。概率与推进速度来自 `config.json` 的
+`rainbow_chance` / `rainbow_freq` / `rainbow_spread` / `rainbow_phase_step`
+（默认 0.05 / 0.2 / 1.0 / 2.0），由 `cli.Run` 在构造 Console 之后用 `SetRainbow`
+覆盖（`console.RainbowOptions`，默认值引用 `config.DefaultRainbow*`）。
+横向速度按 `rainbow_freq` / `rainbow_spread` 控制（约 31 个字符一轮），
+`rainbow_phase_step` 让相邻两段纵向错开相位，避免所有行
 共用同一条横向渐变。`rainbowOS` 是整次运行共用的起始偏移（相当于 lolcat 的 seed），
 纵向相位取当前行号；因此同一行的所有彩色片段颜色一致，换行后才会变化。
 **彩色文本必须一次一行**：一次调用写多行时，`lol.String` 内部每行只把偏移 +1
-（相当于 0.2 rad），不会走 `rainbowPhaseStep`；需要多行就拆成多次调用。
+（相当于 0.2 rad），不会走 `rainbow_phase_step`；需要多行就拆成多次调用。
 **必须用 `AccentPaint` 表达主色，不要写 `Paint(con.Accent(), ...)`**：后者拿不到彩虹，
 也绕开了主色语义；render 里的行优先用 `rowAccent`。
 `SetTransform` 可以整体替换内置实现，传 `nil` 即关闭加工。
@@ -121,10 +125,12 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 三者都没有时报错，不猜默认路径。
 
 `config.json` 还配置仪表盘：`indent`、`no_color`、`recent_limit`、`recent_name_width`、
-`disk_warn_gb`、`show_disk`、`show_git`、`show_holiday`、`show_recent`、`clear_screen`、`quotes`。
+`disk_warn_gb`、`show_disk`、`show_git`、`show_holiday`、`show_recent`、`clear_screen`、
+`rainbow_chance`、`rainbow_freq`、`rainbow_spread`、`rainbow_phase_step`、`quotes`。
 `load` 先取 `DefaultConfig()` 再 `json.Unmarshal`：缺省字段保留默认值，显式 `0/false`
 覆盖默认值，所以 `Config` 字段是普通值、不再用指针。`Config.Validate()` 拦越界值
-（缩进 ≥3、`recent_limit` ≥1、名称宽度 ≥5、磁盘阈值 ≥0、格言非空），错误信息带实际值。
+（缩进 ≥3、`recent_limit` ≥1、名称宽度 ≥5、磁盘阈值 ≥0、彩虹概率 0–1、
+彩虹频率与行距 ≥0、彩虹扩散 >0、格言非空），错误信息带实际值。
 `cli.parseWith` 以配置为默认，`--indent` / `--no-color` 覆盖。配置 JSON 损坏或越界会报错，
 不静默忽略。
 

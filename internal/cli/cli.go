@@ -419,6 +419,13 @@ func Main(args []string) {
 // Run 解析工作区、定位目标、渲染仪表盘，成功时把目标目录写入 --cwd-file。
 func Run(o Options, cfg config.Config, con *console.Console) error {
 	con.SetNoColor(o.Config.NoColor)
+	// 配置在 Console 构造之后才读到，这里把彩虹参数覆盖到本次运行。
+	con.SetRainbow(console.RainbowOptions{
+		Chance:    o.Config.RainbowChance,
+		Freq:      o.Config.RainbowFreq,
+		Spread:    o.Config.RainbowSpread,
+		PhaseStep: o.Config.RainbowPhaseStep,
+	})
 
 	workspace, err := cfg.ResolveWorkspace(o.Workspace)
 	if err != nil {

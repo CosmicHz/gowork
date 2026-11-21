@@ -13,6 +13,7 @@ import (
 	"github.com/0magnet/lolcat-go/lol"
 	"golang.org/x/term"
 
+	"gowork/internal/config"
 	"gowork/internal/sysinfo"
 )
 
@@ -37,33 +38,41 @@ const (
 // Transform 在写出前加工文本；source 告诉加工者这段文本来自程序的哪个部分。
 type Transform func(source Source, text string) string
 
-const (
-	// rainbowChance 是每次运行把主色换成彩虹的概率。
-	rainbowChance = 0.05
+// RainbowOptions 是彩虹主色的可调参数，可由配置文件覆盖。
+type RainbowOptions struct {
+	Chance    float64 // 每次运行抽中彩虹的概率，0 表示不启用
+	Freq      float64 // 每个字符推进的相位（rad），越大颜色变化越快
+	Spread    float64 // 相位的横向扩散，必须大于 0
+	PhaseStep float64 // 相邻输出行之间错开的相位
+}
 
-	// 彩虹的推进速度。横向按 Freq/Spread 决定每个字符的相位差：
-	// 0.2/1 表示约 31 个字符走完一轮，颜色变化肉眼可辨。
-	rainbowFreq   = 0.2
-	rainbowSpread = 1.0
-	// rainbowPhaseStep 是相邻两段之间纵向错开的相位，避免所有行共用同一条横向渐变。
-	rainbowPhaseStep = 1.0
-)
+// defaultRainbow 返回内置的彩虹参数。默认值统一放在 config 包，
+// 避免构造时的兜底值与配置文件默认值各写一份。
+func defaultRainbow() RainbowOptions {
+	return RainbowOptions{
+		Chance:    config.DefaultRainbowChance,
+		Freq:      config.DefaultRainbowFreq,
+		Spread:    config.DefaultRainbowSpread,
+		PhaseStep: config.DefaultRainbowPhaseStep,
+	}
+}
 
 // Console 持有控制台的两个输出流与终端状态。请用 New / NewWith 构造。
 // 每次运行只有一个实例：cli.Main 构造后传给 render、clone 与子命令，
 // 因此它记录的当前行号对整个输出过程都成立。
 type Console struct {
-	stdout    io.Writer // 标准输出流，仪表盘、帮助与子命令输出都写这里
-	stderr    io.Writer // 标准错误流，只用于错误信息
-	stdoutTTY bool      // stdout 是否为真实终端，决定清屏、标题与着色
-	stderrTTY bool      // stderr 是否为真实终端，单独决定错误信息是否着色
-	noColor   bool      // 是否禁用颜色（--no-color / 配置项）
-	width     int       // 终端宽度，探测失败按 80 兜底
-	accent    string    // 本次运行的主色
-	line      int       // 已经写完的行数，Line 据此给出当前行号
-	rainbow   bool      // 主色是否改用彩虹渐变
-	rainbowOS float64   // 彩虹起始偏移，随机挑选让每次运行的配色不同
-	transform Transform // 写出前的统一加工，nil 表示原样输出
+	stdout      io.Writer      // 标准输出流，仪表盘、帮助与子命令输出都写这里
+	stderr      io.Writer      // 标准错误流，只用于错误信息
+	stdoutTTY   bool           // stdout 是否为真实终端，决定清屏、标题与着色
+	stderrTTY   bool           // stderr 是否为真实终端，单独决定错误信息是否着色
+	noColor     bool           // 是否禁用颜色（--no-color / 配置项）
+	width       int            // 终端宽度，探测失败按 80 兜底
+	accent      string         // 本次运行的主色
+	line        int            // 已经写完的行数，Line 据此给出当前行号
+	rainbow     bool           // 主色是否改用彩虹渐变
+	rainbowOS   float64        // 彩虹起始偏移，随机挑选让每次运行的配色不同
+	rainbowOpts RainbowOptions // 彩虹的概率与推进速度等相关选项
+	transform   Transform      // 写出前的统一加工，nil 表示原样输出
 }
 
 // New 绑定标准输出与标准错误，并开启 Windows 控制台的 ANSI 解析与 UTF-8 代码页。
@@ -77,7 +86,8 @@ func New() *Console {
 		width:     widthOf(os.Stdout),
 		accent:    Palette[rand.IntN(len(Palette))],
 	}
-	c.rainbow = rand.Float64() < rainbowChance
+	c.rainbowOpts = defaultRainbow()
+	c.rainbow = rand.Float64() < c.rainbowOpts.Chance
 	c.rainbowOS = rand.Float64() * 100
 	c.transform = c.defaultTransform
 	return c
@@ -94,6 +104,7 @@ func NewWith(stdout, stderr io.Writer, stdoutTTY, stderrTTY bool) *Console {
 		width:     80,
 		accent:    Palette[0],
 	}
+	c.rainbowOpts = defaultRainbow()
 	if f := fileOf(stdout); f != nil {
 		c.width = widthOf(f)
 	}
@@ -120,6 +131,14 @@ func (c *Console) SetWidth(width int) { c.width = width }
 func (c *Console) SetAccent(accent string) {
 	c.accent = accent
 	c.rainbow = false
+}
+
+// SetRainbow 替换彩虹参数，并按新的概率重新抽取本次是否启用。
+// 配置文件在 Console 构造之后才读到，所以由调用方在这里覆盖；
+// 之后再调用 SetAccent 仍会关闭彩虹。
+func (c *Console) SetRainbow(opts RainbowOptions) {
+	c.rainbowOpts = opts
+	c.rainbow = rand.Float64() < opts.Chance
 }
 
 // SetNoColor 设置是否禁用 ANSI 颜色；stdout 与 stderr 共用这一开关。
@@ -165,14 +184,14 @@ func (c *Console) AccentPaint(s string) string {
 }
 
 // rainbowPaint 用 lolcat 的逐字符彩虹画出主色文本。
-// 横向每个字符推进 rainbowFreq rad；纵向按当前行号错开相位，
+// 横向每个字符推进 Freq/Spread 决定的相位；纵向按当前行号错开 PhaseStep，
 // 所以相邻行的颜色不同，看上去是斜向流动而不是清一色的横向渐变。
 // lol 的选项只填写 String 实际读取的字段
 func (c *Console) rainbowPaint(s string) string {
 	o := lol.Options{
-		Freq:      rainbowFreq,
-		Spread:    rainbowSpread,
-		OS:        c.rainbowOS + float64(c.line)*rainbowPhaseStep,
+		Freq:      c.rainbowOpts.Freq,
+		Spread:    c.rainbowOpts.Spread,
+		OS:        c.rainbowOS + float64(c.line)*c.rainbowOpts.PhaseStep,
 		Truecolor: lol.DetectMode(os.Getenv("COLORTERM")) == lol.ModeTrueColor,
 	}
 	return lol.String(s, o)

@@ -30,6 +30,10 @@ func TestLoadAllFields(t *testing.T) {
 		"show_holiday": false,
 		"show_recent": false,
 		"clear_screen": false,
+		"rainbow_chance": 0.5,
+		"rainbow_freq": 0.3,
+		"rainbow_spread": 2.0,
+		"rainbow_phase_step": 1.5,
 		"quotes": ["甲", "乙"]
 	}`)
 
@@ -54,6 +58,10 @@ func TestLoadAllFields(t *testing.T) {
 	}
 	if c.DiskWarnGB != 5.5 {
 		t.Errorf("disk_warn_gb = %v", c.DiskWarnGB)
+	}
+	if c.RainbowChance != 0.5 || c.RainbowFreq != 0.3 ||
+		c.RainbowSpread != 2.0 || c.RainbowPhaseStep != 1.5 {
+		t.Errorf("彩虹参数解析不对：%+v", c)
 	}
 	for name, got := range map[string]bool{
 		"show_disk": c.ShowDisk, "show_git": c.ShowGit,
@@ -94,6 +102,10 @@ func TestLoadKeepsDefaultsForOmittedFields(t *testing.T) {
 		c.DiskWarnGB != DefaultDiskWarnGB {
 		t.Errorf("省略字段应保留默认值：%+v", c)
 	}
+	if c.RainbowChance != DefaultRainbowChance || c.RainbowFreq != DefaultRainbowFreq ||
+		c.RainbowSpread != DefaultRainbowSpread || c.RainbowPhaseStep != DefaultRainbowPhaseStep {
+		t.Errorf("省略彩虹参数应保留默认值：%+v", c)
+	}
 	if !c.ShowDisk || !c.ShowGit || !c.ShowHoliday || !c.ShowRecent || !c.ClearScreen {
 		t.Errorf("省略开关应保留 true：%+v", c)
 	}
@@ -119,6 +131,10 @@ func TestLoadValidation(t *testing.T) {
 		{"最近数量为 0", `{"recent_limit": 0}`, "recent_limit=0"},
 		{"名称宽度过小", `{"recent_name_width": 4}`, "recent_name_width=4"},
 		{"磁盘阈值为负", `{"disk_warn_gb": -1}`, "disk_warn_gb=-1"},
+		{"彩虹概率越界", `{"rainbow_chance": 1.5}`, "rainbow_chance=1.5"},
+		{"彩虹频率为负", `{"rainbow_freq": -1}`, "rainbow_freq=-1"},
+		{"彩虹扩散为 0", `{"rainbow_spread": 0}`, "rainbow_spread=0"},
+		{"彩虹行距为负", `{"rainbow_phase_step": -0.5}`, "rainbow_phase_step=-0.5"},
 		{"空格言", `{"quotes": ["ok", "  "]}`, "quotes[1]"},
 	}
 	for _, c := range cases {
@@ -142,6 +158,10 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !c.ShowDisk || !c.ShowGit || !c.ShowHoliday || !c.ShowRecent || !c.ClearScreen {
 		t.Errorf("默认开关应全部为 true：%+v", c)
+	}
+	if c.RainbowChance != DefaultRainbowChance || c.RainbowFreq != DefaultRainbowFreq ||
+		c.RainbowSpread != DefaultRainbowSpread || c.RainbowPhaseStep != DefaultRainbowPhaseStep {
+		t.Errorf("默认彩虹参数不对：%+v", c)
 	}
 	if c.Quotes != nil {
 		t.Errorf("默认不该带自定义格言：%v", c.Quotes)

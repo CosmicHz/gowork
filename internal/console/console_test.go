@@ -239,6 +239,28 @@ func TestRainbowAccent(t *testing.T) {
 	}
 }
 
+// TestSetRainbow 钉住配置项在构造之后生效：概率 1 必定启用，概率 0 一定关闭。
+func TestSetRainbow(t *testing.T) {
+	clearNoColor(t)
+	con := NewWith(io.Discard, io.Discard, true, true)
+
+	con.SetRainbow(RainbowOptions{Chance: 1, Freq: 0.2, Spread: 1, PhaseStep: 1})
+	if !con.rainbow {
+		t.Fatal("概率为 1 时应启用彩虹")
+	}
+	if got := con.AccentPaint("ab"); !strings.Contains(got, "\x1b[38;") {
+		t.Errorf("启用后主色应逐字符上色，得到 %q", got)
+	}
+
+	con.SetRainbow(RainbowOptions{Chance: 0, Freq: 0.2, Spread: 1, PhaseStep: 1})
+	if con.rainbow {
+		t.Error("概率为 0 时不该启用彩虹")
+	}
+	if got, want := con.AccentPaint("ab"), con.Accent()+"ab"+Reset; got != want {
+		t.Errorf("关闭后应回到整段单色，得到 %q，想要 %q", got, want)
+	}
+}
+
 // TestLabelPaint 钉住行标签始终暗灰，抽中彩虹也不跟随。
 func TestLabelPaint(t *testing.T) {
 	clearNoColor(t)
