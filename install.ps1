@@ -1,5 +1,6 @@
-# gowork 安装脚本：下载最新正式 release 的二进制，装进用户目录，
+# gowork 安装脚本：下载最新 release 的二进制，装进用户目录，
 # 并把 PATH 与 work 集成写进当前 shell 的配置（可用 -NoModify 跳过）。
+# 默认优先正式版；取不到时自动回退到最新发布版本。
 #
 # 用法：
 #   irm https://raw.githubusercontent.com/CosmicHz/gowork/main/install.ps1 | iex
@@ -54,30 +55,46 @@ function Get-AssetArch {
     }
 }
 
+function Get-ListedRelease([hashtable]$Headers) {
+    # 取 /releases 列表里第一条未标记 draft 的 release；请求失败时抛出。
+    $list = Invoke-RestMethod -Uri $releasesApi -Headers $Headers
+    return @($list) | Where-Object { -not $_.draft } | Select-Object -First 1
+}
+
 function Install-FromRelease {
     Enable-Tls12
     $arch = Get-AssetArch
     $headers = @{ 'User-Agent' = 'gowork-install' }
 
-    # 默认用 /releases/latest（只含正式版）；-PreRelease 时改用列表第一条，
-    # 未认证的列表接口不返回 draft，但包含预发布。
+    # 默认用 /releases/latest 取正式版；取不到时回退到列表第一条（即使它是预发布）。
+    # --pre-release 直接取列表第一条。未认证的列表接口不返回 draft，但包含预发布。
     if ($PreRelease) {
         try {
-            $releases = Invoke-RestMethod -Uri $releasesApi -Headers $headers
+            $release = Get-ListedRelease -Headers $headers
         }
         catch {
-            Fail '没有找到可安装的 release；请检查网络或 GitHub API 是否可用'
+            Fail '无法访问 GitHub API，请检查网络或稍后重试'
         }
-        $release = @($releases) | Where-Object { -not $_.draft } | Select-Object -First 1
-        if (-not $release) { Fail '没有找到可安装的 release；请检查网络或 GitHub API 是否可用' }
+        if (-not $release) { Fail '仓库还没有发布任何 release' }
         Write-Host "使用预发布版本 $($release.tag_name)"
     }
     else {
+        $release = $null
         try {
             $release = Invoke-RestMethod -Uri $latestReleaseApi -Headers $headers
         }
         catch {
-            Fail '没有找到正式发布的 release；需要预发布版本时加 -PreRelease'
+            $release = $null
+        }
+        if (-not $release -or -not $release.tag_name) {
+            try {
+                $release = Get-ListedRelease -Headers $headers
+            }
+            catch {
+                Fail '无法访问 GitHub API，请检查网络或稍后重试'
+            }
+            if (-not $release) { Fail '仓库还没有发布任何 release' }
+            Write-Host "未找到正式版本，改用最新发布版本 $($release.tag_name)"
         }
     }
 

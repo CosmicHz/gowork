@@ -1,6 +1,7 @@
 #!/bin/sh
-# gowork 安装脚本：下载最新正式 release 的二进制，装进用户目录，
+# gowork 安装脚本：下载最新 release 的二进制，装进用户目录，
 # 并把 PATH 与 work 集成写进当前 shell 的配置（可用 --no-modify 跳过）。
+# 默认优先正式版；取不到时自动回退到最新发布版本。
 #
 # 用法：
 #   curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh | sh
@@ -33,7 +34,7 @@ usage() {
 选项:
   --bin-dir <路径>  安装目录，默认 ~/.local/bin，也可用 GOWORK_BIN_DIR 指定
   --from-source     从源码构建（需要 Go；在仓库内用当前代码，否则浅克隆）
-  --pre-release     安装最新预发布版本（默认只用正式版）
+  --pre-release     直接安装最新的预发布版本（默认优先正式版，找不到时回退）
   --no-modify       只装二进制，不改 PATH，也不写 shell 配置
   -h, --help        显示这段帮助
 EOF
@@ -74,6 +75,11 @@ download() {
     else
         wget -qO "$2" "$1"
     fi
+}
+
+# release_tag 从 release 响应里取第一个 tag_name；取不到时输出空。
+release_tag() {
+    printf '%s\n' "$1" | grep -m1 '"tag_name"' | cut -d'"' -f4
 }
 
 is_fish() {
@@ -470,17 +476,27 @@ install_from_release() {
     *) die "不支持的架构：${machine:-unknown}（请用 --from-source 自行构建）" ;;
     esac
 
-    # 默认用 /releases/latest（只含正式版）；--pre-release 时改用列表第一条，
-    # 未认证的列表接口不返回 draft，但包含预发布。
+    # 默认用 /releases/latest 取正式版；取不到时回退到列表第一条（即使它是预发布）。
+    # --pre-release 直接取列表第一条。未认证的列表接口不返回 draft，但包含预发布。
     if [ "$pre_release" -eq 1 ]; then
-        payload=$(fetch "$releases_api") || die '没有找到可安装的 release；请检查网络或 GitHub API 是否可用'
-    else
-        payload=$(fetch "$latest_api") || die '没有找到正式发布的 release；需要预发布版本时加 --pre-release'
-    fi
-    tag=$(printf '%s\n' "$payload" | grep -m1 '"tag_name"' | cut -d'"' -f4)
-    [ -n "$tag" ] || die '没有找到可安装的 release；请检查网络或 GitHub API 是否可用'
-    if [ "$pre_release" -eq 1 ]; then
+        payload=$(fetch "$releases_api") || die '无法访问 GitHub API，请检查网络或稍后重试'
+        tag=$(release_tag "$payload")
+        [ -n "$tag" ] || die '仓库还没有发布任何 release'
         printf '使用预发布版本 %s\n' "$tag"
+    else
+        payload=$(fetch "$latest_api") || payload=""
+        tag=$(release_tag "$payload")
+        if [ -z "$tag" ]; then
+            payload=$(fetch "$releases_api") || die '无法访问 GitHub API，请检查网络或稍后重试'
+            tag=$(release_tag "$payload")
+            if [ -z "$tag" ]; then
+                if printf '%s' "$payload" | grep -q '"tag_name"'; then
+                    die 'GitHub API 返回的内容里没有可用的版本'
+                fi
+                die '仓库还没有发布任何 release'
+            fi
+            printf '未找到正式版本，改用最新发布版本 %s\n' "$tag"
+        fi
     fi
 
     version=${tag#v}
@@ -559,7 +575,11 @@ else
 fi
 
 if [ "${restart_needed:-0}" -eq 1 ]; then
-    printf '\n重开终端后运行 work；工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
+    kind=$(hook_kind_for_shell)
+    printf '\n重开终端后运行 work；也可以在当前终端直接执行：\n'
+    printf '  %s\n' "$(path_line_for_kind "$kind")"
+    printf '  %s\n' "$(hook_line_for_kind "$kind")"
+    printf '\n工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
 else
     printf '\n工作区用 GOWORK_WORKSPACE 或配置文件指定。\n'
 fi
