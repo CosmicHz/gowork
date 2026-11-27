@@ -2,7 +2,7 @@
 
 > 你的工作需要一场开机仪式。
 
-gowork是一个**会迎接你**的 cd。它帮助你简单、快速、炫酷地进入工作区内的项目文件夹，并在它们之间跳转。
+gowork 是一个**会迎接你**的 cd。它帮助你简单、快速、炫酷地进入工作区内的项目文件夹，并在它们之间跳转。
 
 ```text
 PS C:\Projects\gowork> work awe
@@ -33,8 +33,103 @@ PS C:\Projects\gowork> work awe
 ```
 
 支持 Windows、macOS 与 Linux（含 WSL）。Windows 用 PowerShell 7；
-shell 集成由 `gowork init <shell>` 生成，覆盖 PowerShell、bash / POSIX sh、fish，
-以及 zsh（有自动补全支持）。从源码构建需要 Go 1.26.5 或更新。
+shell 集成覆盖 PowerShell、bash / POSIX sh、fish，以及 zsh（有自动补全支持）。
+从源码构建需要 Go 1.26.5 或更新。
+
+## 功能
+
+如果你常常将多个仓库平铺在一个“工作区”文件夹内，并且仍然常常使用繁琐的 `cd` 命令在这些仓库文件夹间跳转，又或是希望让自己进入仓库的那一刻多点仪式感，**gowork**可以帮到你。
+gowork 把“开工”变成一条命令。它可以让你快捷跳转到工作区内目标目录，并拥有一个漂亮的仪表盘（如前所示）。
+你指定一个目录作为**工作区**[（怎么做？）](#工作区)，使工作区里每个子目录就是一个项目；安装后得到一个 `work` 命令。
+
+```sh
+work                # 回到工作区根目录
+work my-app         # 进入完整名为 my-app 的项目
+work my             # 只记得开头：唯一前缀直接进入，多个命中时列出候选
+work -1             # 进入最近修改的第 1 个项目；-2…-9 同理
+work --recent 12    # 第 12 个（-1…-9 之外的写法）
+work https://github.com/user/repo.git   # 克隆到工作区，然后进入
+```
+
+运行时它会做这些事：
+
+- **切到目标目录**：最基本的功能。
+- **显示一屏仪表盘**：当前时间与问候、切换后的位置、项目总数、磁盘可用空间、Git 分支与未提交数量、下一个假期还剩几天、最近活跃的几个项目，以及一条随机格言。（[详细介绍](#仪表盘)）
+- **按名字或前缀匹配**：如果你输入的项目名不完整， gowork 会按前缀匹配尽量猜测。它会进入以你输入的项目名为目录名前缀（大小写不敏感）的工作区子目录；多个前缀命中时进入名字最短的那个，并列出全部候选；没有命中就报错。
+  > [!NOTE]
+  > 这个匹配策略无疑是基础的。后续会添加更多和更人性化的模糊匹配策略。
+- **按最近修改排序跳转**：通过 `-1`…`-9` 与 `--recent N` 选项进入第 N 个最近修改的项目，越界时提示有效范围。
+- **识别仓库地址**：参数[看起来像](#什么样的参数会被认为是仓库地址)仓库地址时，先 `git clone` 到工作区再进入；目录已存在则直接进入。
+
+工作区路径、缩进、颜色、显示哪些行、最近活跃数量、格言等配置都可以写进 `config.json`。（[所有配置项](#配置项)）
+
+### 仪表盘
+
+每次运行 `work` 都会先清屏（`clear_screen`，默认开），再从上到下打印：
+
+1. **logo 与项目名**：进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`（亮白色），
+   窗口标题同时设为 `WORK | <项目名>`；回工作区根目录时不加。
+   放不下时（缩进 + logo 35 列 + 2 空格 + 后缀 > 终端宽度）改为另起一行。
+
+   ```text
+      ██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗
+      ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝
+      ██║ █╗ ██║██║   ██║██████╔╝█████╔╝
+      ██║███╗██║██║   ██║██╔══██╗██╔═██╗
+      ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗  on awesome-project
+       ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+   ```
+
+2. **问候语**：按小时分段——0-6 点「夜深了，注意休息 🌙」、6-12 点「早上好，新的一天 ☀️」、
+   12-14 点「中午好，别忘了吃饭 🍜」、14-18 点「下午好，效率正高 🚀」、
+   18-24 点「晚上好，收个尾吧 🌆」。
+3. **信息**：
+
+   | 行 | 含义 | 取不到时 |
+   | --- | --- | --- |
+   | 时间 | 本地时间、中文星期、24 小时制 | — |
+   | 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
+   | 项目 | 工作区下的项目数 | — |
+   | 可用空间 | 目标所在卷的可用 / 总量；括号内为盘符或挂载点（根挂载点写作「根分区」）。可用低于 `disk_warn_gb`（默认 10 GB）显示为红色 | 整行不显示 |
+   | Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain=v2 --branch` 中除 `#` 开头元信息外的行数） | 非仓库或无 git → 整行不显示 |
+   | 节日 | 见[节假日](#节假日) | 显示 `数据获取失败⚠️` |
+
+   ```text
+         时间        2026-10-17  星期六  16:17:18
+         位置        C:\Projects\awesome-project
+         项目        67 个项目
+         可用空间    114.0 GB / 514.0 GB  (C:)
+         Git         chore/important-feature  ·  5 项未提交
+         节日        元旦🎉  还有 76 天  (放假 3 天)
+   ```
+
+4. **最近活跃**：按修改时间倒序前 `recent_limit`（默认 4）个；名字按显示宽度截到
+   `recent_name_width`（默认 35，超出则留 3 列给 `...`）列，后接 `MM-dd HH:mm`。
+   没有项目时整段不显示。
+
+   ```text
+        最近活跃
+       1  gowork                              10-11 21:59
+       2  openclaw                            10-11 21:57
+       3  deepseek-harness                    10-11 21:55
+       4  lolcat                              10-11 21:17
+   ```
+
+5. **格言**：底部随机一条；内置一组，可用 `quotes` 覆盖。
+
+   ```text
+        代码是写给人看的，顺便让机器运行。
+   ```
+
+6. **提示区**：前缀命中多个目录、索引与目录同名、选项名与目录同名等情况发生时，会在格言之后显示警告。
+
+   ```text
+        ⚠ 前缀 'open' 匹配到多个项目，跳转到最短匹配：
+        opencode
+        openclaw
+   ```
+
+输出被重定向时不清屏，也不设置窗口标题。
 
 ## 安装
 
@@ -54,9 +149,11 @@ curl -fsSL https://raw.githubusercontent.com/CosmicHz/gowork/main/install.sh | s
 
 脚本会：
 
-1. 下载**最新正式 release** 的预编译二进制，并用 release 里的 `checksums.txt` 校验 sha256；
+1. 下载**最新正式 release** 的预编译二进制（没有正式版时自动改用最新发布版本），并用 release 里的 `checksums.txt` 校验 sha256；
 2. 装进用户目录；
 3. 把该目录加入用户 PATH，并把 `work` 集成写进当前 shell 的配置。
+
+Windows 上脚本还会把 `work` 命令直接加载到当前 PowerShell 会话。macOS / Linux 的脚本运行在子 shell 里，改不了父 shell，但脚本会给出手动加载 `work` 的命令，粘贴到当前终端即可立即使用 `work`。
 
 重复执行会覆盖升级，已配置过的 PATH 与 shell 集成不会重复追加。如果已有配置命令里的
 shell 集成命令与当前 shell 不匹配（例如 zsh 里还是 `init sh`），脚本会询问是否换成匹配当前
@@ -295,11 +392,13 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `show_holiday` | `true` | 是否显示「节日」行 |
 | `show_recent` | `true` | 是否显示「最近活跃」 |
 | `clear_screen` | `true` | 是否清屏（仅真实终端） |
-| `rainbow_chance` | `0.05` | 主色换成彩虹的概率（0–1）；`0` 表示不启用 |
+| `rainbow_chance` | `0.05` | 主色换成彩虹[^1]的概率（0–1）；`0` 表示不启用 |
 | `rainbow_freq` | `0.2` | 彩虹每列的相位推进（rad），越大变色越快 |
 | `rainbow_spread` | `1.0` | 彩虹相位的横向扩散，必须大于 0 |
 | `rainbow_phase_step` | `2.0` | 相邻输出行之间错开的相位 |
 | `quotes` | 内置格言 | 底部格言的候选数组，随机取一条 |
+
+[^1]: 主色有小概率换成彩虹渐变色，`rainbow_*` 四项控制概率与推进速度；不想要时把 `rainbow_chance` 设为 `0`。
 
 ```json
 {
@@ -331,8 +430,6 @@ printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
 | `work -Workspace D:\code my-app` | 本次改用它作为工作区 |
 
 ### 选项一览
-
-项目选择器只能三选一：**直接写项目名**、**`--project`**、**`--recent` / `-1`…`-9`**。
 
 #### 项目选择器
 
@@ -375,7 +472,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 ### 项目名匹配
 
 假设工作区为 `C:\Projects`，含 `my-app`、`my-service` 等项目。
-执行`work <名称>`时，程序按顺序尝试：
+执行 `work <名称>` 时，程序按顺序尝试：
 
 1. **完整名**：工作区文件夹内，`<名称>` 存在且是目录 → 直接跳转。
    如 `work my-app` 会跳转到 `C:\Projects\my-app`。
@@ -414,7 +511,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 ### 子命令与目录同名
 
-`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）都只在直接运行 `gowork` 时生效。shell 函数总在用户参数之前插入内部参数，所以 `work init` / `work complete` 里的名字是项目名。换句话说，子命令在 `work` 调用方式中无效。
+`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）都只在直接运行 `gowork` 时生效。shell 函数会注入一个内部标记，标记存在时所有子命令都不生效，所以 `work init` / `work complete` 里的名字是项目名。
 工作区里若真有名为 `init` 或 `complete` 的目录，`work init` / `work complete` 会直接进入它。
 
 ### 选项名与目录同名
@@ -429,7 +526,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 `--cwd-file` 是内部选项，由 shell 自动注入，`-h` / `--help` 会在打印帮助后直接退出，所以这两类不参与提示。`--` 之后的参数也不参与（因为不被解析为选项）。
 
-### 仓库地址
+### 什么样的参数会被认为是仓库地址？
 
 判定范围与 git 自己一致：
 
@@ -438,7 +535,7 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 - **scp 形式**：`[user@]host:path`，用户名可省略，如 `github.com:owner/repo.git`。
   项目名本身含冒号时（`name:tag`），写 `work ./name:tag` 可避免被当成地址。
 
-**不认**裸写域名，如 `github.com/owner/repo`——git 自己也把它当本地路径。
+**不认**裸写域名，如 `github.com/owner/repo`。git 自己也把它当本地路径。
 同理，单字母主机（`C:\x`、`C:/x`）按盘符处理，不会被当成地址。
 这两类都会当作项目名去匹配，匹配不到就报「目录不存在」。
 
@@ -451,27 +548,6 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 - 需要克隆时：先清屏，打印地址与目标，然后 git 直连控制台（进度条、SSH 与凭据提示都正常）。
   成功后重新扫描工作区，仪表盘会把新仓库排到「最近活跃」第 1 位。
   失败时报 `克隆失败：<地址>`，退出码 1，git 的原始输出保留在屏幕上。
-
-### 仪表盘
-
-| 行 | 含义 | 取不到时 |
-| --- | --- | --- |
-| 时间 | 本地时间、中文星期、24 小时制 | — |
-| 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
-| 项目 | 工作区下的项目数 | — |
-| 可用空间 | 目标所在卷的可用 / 总量；括号内为盘符或挂载点（根挂载点写作「根分区」）。可用低于 `disk_warn_gb`（配置项，默认 10 GB）显示为红色 | 整行不显示 |
-| Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain` 的非空行数） | 非仓库或无 git → 整行不显示 |
-| 节日 | 见下 | 显示 `数据获取失败⚠️` |
-| 最近活跃 | 按修改时间倒序前 `recent_limit`（配置项，默认 4） 个；名字按显示宽度截到 `recent_name_width`（配置项，默认 35，超出则留 3 列给 `...`） 列，后接 `MM-dd HH:mm` | 没有项目 → 整段不显示 |
-
-标题与问候语：
-
-- 窗口标题设为 `WORK | <项目名>`。
-- 进入具体项目时，logo 倒数第二行末尾补 `on <项目名>`（亮白色）；回工作区根目录时不加。
-  放不下时（缩进 + logo 35 列 + 2 空格 + 后缀 > 终端宽度）改为另起一行。
-- 问候语按小时分段：0-6 点「夜深了」、6-12 点「早上好」、12-14 点「中午好」、
-  14-18 点「下午好」、18-24 点「晚上好」。
-- 底部随机一条格言。
 
 ### 节假日
 
@@ -493,10 +569,10 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 | 码 | 含义 |
 | --- | --- |
 | 0 | 成功（并写入目标目录，shell 函数据此 `Set-Location` / `cd`） |
-| 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名 |
-| 2 | 参数错误，例如 `--indent` 小于 3、`init` 指定了不支持的 shell。三种 shell 一致：PowerShell 的 `-IndentSize` 只负责整数类型转换，范围由 gowork 判定 |
+| 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名、配置文件损坏 |
+| 2 | 参数错误，例如 `--indent` 小于 3、`init` 指定了不支持的 shell。各 shell 一致 |
 
-失败时统一**不切换目录**，错误以红字写到 stderr。解析阶段的失败不清屏（保留现场），
+失败时统一**不切换目录**，错误写到 stderr（终端下为红字）。解析阶段的失败不清屏（保留现场），
 克隆失败时屏幕已清（因为要显示克隆过程）。
 
 ### 直接调用可执行文件
@@ -537,7 +613,7 @@ gowork/
 │   ├── clone/           仓库地址识别、仓库名推断、git clone
 │   ├── shell/           gowork init 的 shell 集成模板（sh / fish / powershell / zsh）
 │   └── sysinfo/         颜色开关、VT 与磁盘空间
-├── install.sh           macOS / Linux 安装脚本：构建并放到 PATH 目录
+├── install.sh           下载或构建二进制并安装，配置 PATH 与 shell 集成
 ├── install.ps1          Windows 安装脚本，同上
 └── .github/workflows/   CI 与发布
 ```
@@ -550,19 +626,14 @@ gowork/
 ```sh
 gofmt -l .      # 应为空
 go vet ./...    # 静态检查
-go test ./...   # 单元测试（macOS / Linux 上可直接跑）
+go test ./...   # 单元测试
 
 # 交叉编译
 GOOS=windows GOARCH=amd64 go build -o bin/gowork.exe ./cmd/gowork
 GOOS=darwin  GOARCH=arm64 go build -o bin/gowork-darwin-arm64 ./cmd/gowork
 ```
 
-平台相关的只有 `sysinfo` 里的 `EnableVT` 与 `DiskUsage`，用构建标签隔开；其余包与平台无关，
-所以在 macOS / Linux 上 `go test` 就能覆盖目标解析、前缀匹配、索引写法、宽度截断、
-节假日文案等纯逻辑，不必等到 Windows 上才能验。
-
-CI 在 Windows、macOS、Linux 三个平台各跑一遍 `gofmt`、`go vet` 与 `go test`（用 gotestsum
-输出，摘要里会列出跳过数量，配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试会用 bash、zsh、dash、
+CI 在 Windows、macOS、Linux 三个平台各跑一遍 `gofmt`、`go vet` 与 `gotestsum`（摘要里会列出跳过数量，配置见 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。测试会用 bash、zsh、dash、
 fish 与 PowerShell 分别解析生成的集成代码，Windows 上还会额外用 PowerShell 5.1；
 某个 shell 没装就跳过。CI 会在跑测试前逐个确认这些解释器都在，装失败直接报错，
 避免静默失去覆盖。
@@ -583,7 +654,7 @@ gowork 会把目标目录写进 `--cwd-file` 指定的临时文件，由 shell �
 - `sh` 与 `fish`：gowork 是直接调用的（不接管道、不做命令替换），这样一来它的 stdout 才是真终端，因此清屏、窗口标题和颜色才会生效。
 - `zsh`：在 sh 函数体之后追加补全脚本。`_gowork` 通过 `gowork complete projects`
   动态取项目名（最近修改的在前），并描述全部选项；`-p` 补项目、`-w` 补目录、
-  `-i` / `--recent` 补数字、输入 `-` 补 `-1`…`-9`。补全依赖 zsh 的 `compinit`，
+  `-i` / `--recent` 补数字、输入 `-1`…`-9` 时给出索引候选。补全依赖 zsh 的 `compinit`，
   没加载时静默跳过。oh-my-zsh / prezto 等框架通常已经加载它；手动配置的 zsh 需要在
   `eval "$(gowork init zsh)"` 之前有一句 `autoload -Uz compinit && compinit`。
 
