@@ -311,7 +311,7 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   `PROCESSOR_ARCHITECTURE`（优先 `PROCESSOR_ARCHITEW6432`）。其他系统或架构报错并提示源码构建。
 - release 选择：默认先查 `/releases/latest`（只返回正式版，draft 与预发布都被跳过）；
   取不到时回退到 `/releases` 列表第一条（未认证列表不含 draft，但包含预发布），并提示
-  「未找到正式版本，改用最新发布版本 <tag>」。`--pre-release` / `-PreRelease` 直接走列表。
+  `未找到正式版本，改用最新发布版本 <tag>`。`--pre-release` / `-PreRelease` 直接走列表。
   两次请求都失败、列表为空、列表有数据但没有 `tag_name` 分别给出不同的错误。
   发布只上传版本化文件名，
   所以资产名靠 tag 拼出来；`release.yml` 按 tag 里的 `-` 自动设置 `prerelease`。
