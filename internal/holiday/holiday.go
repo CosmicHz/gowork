@@ -85,8 +85,54 @@ func Next(now time.Time) Holiday {
 	if err != nil {
 		return Holiday{Name: "数据获取失败", Icon: "⚠️"}
 	}
-	writeCache(resp)
+	_ = writeCache(resp)
 	return h
+}
+
+// Prepare 检查缓存：剩余覆盖期还够就直接复用，快用完或不可用时请求接口。
+// 返回的 bool 表示这次是否真的重新抓取。供 prepare 子命令提前预热。
+func Prepare(now time.Time) (Holiday, bool, error) {
+	if h, ok := usableCache(now); ok {
+		return h, false, nil
+	}
+
+	resp, err := fetch(now)
+	if err != nil {
+		return Holiday{}, false, err
+	}
+	h, err := parseHoliday(resp, now)
+	if err != nil {
+		return Holiday{}, false, err
+	}
+	if err := writeCache(resp); err != nil {
+		return Holiday{}, false, err
+	}
+	return h, true, nil
+}
+
+// usableCache 返回缓存里可复用、且剩余覆盖期超过 prepareMargin 的节日。
+// 缓存不可用、挑不出未来节日或即将过期时返回 false。
+func usableCache(now time.Time) (Holiday, bool) {
+	return cachedHoliday(now, prepareMargin)
+}
+
+// prepareMargin 是缓存剩余覆盖期的下限：最晚的事件日期距今不足这么多天时提前刷新，
+// 避免缓存刚好在下一次运行时过期。
+const prepareMargin = 7 * 24 * time.Hour
+
+// lastEventDate 返回缓存里最晚的事件日期；没有可解析的日期时返回零值。
+func lastEventDate(events []cachedHolidayEvent) time.Time {
+	var last time.Time
+	for _, e := range events {
+		d, err := time.ParseInLocation(time.DateOnly, e.Date, time.Local)
+		if err != nil {
+			continue
+		}
+		if d.After(last) {
+			last = d
+		}
+	}
+	return last
 }
 
 // Line 把查询结果渲染成仪表盘「节日」行的一句话。
@@ -120,7 +166,7 @@ func Line(h Holiday, now time.Time) string {
 // 特此记录。
 func fetch(now time.Time) (holidayResponse, error) {
 	q := url.Values{}
-	q.Set("date", now.Format("2006-01-02"))
+	q.Set("date", now.Format(time.DateOnly))
 	q.Set("holiday_type", "all")
 	q.Set("include_nearby", "true")
 	q.Set("nearby_limit", "30")
@@ -248,7 +294,7 @@ func earliestFrom(dates map[string]string, today time.Time) (time.Time, string) 
 	var start time.Time
 	name := ""
 	for date, n := range dates {
-		d, err := time.ParseInLocation("2006-01-02", date, time.Local)
+		d, err := time.ParseInLocation(time.DateOnly, date, time.Local)
 		if err != nil || d.Before(today) {
 			continue
 		}
@@ -264,7 +310,7 @@ func earliestFrom(dates map[string]string, today time.Time) (time.Time, string) 
 func restRun(rest map[string]string, start time.Time) int {
 	first := start
 	for {
-		prev := first.AddDate(0, 0, -1).Format("2006-01-02")
+		prev := first.AddDate(0, 0, -1).Format(time.DateOnly)
 		if _, ok := rest[prev]; !ok {
 			break
 		}
@@ -273,46 +319,64 @@ func restRun(rest map[string]string, start time.Time) int {
 
 	n := 0
 	for d := first; ; d = d.AddDate(0, 0, 1) {
-		if _, ok := rest[d.Format("2006-01-02")]; !ok {
+		if _, ok := rest[d.Format(time.DateOnly)]; !ok {
 			return n
 		}
 		n++
 	}
 }
 
-// readCache 用缓存里整理好的记录重新挑选。缓存里还有未来的节日就复用，
-// 全部过去之后（挑不出结果）才返回 false，让调用方重新请求。
+// readCache 读取节日缓存，缓存里还有未来的节日就复用，
+// 没有则返回 false，让调用方重新请求网络。
 func readCache(now time.Time) (Holiday, bool) {
-	path, err := cachePath()
+	return cachedHoliday(now, 0)
+}
+
+// cachedHoliday 从缓存里挑出今天或之后最近的节日；离此时不足 margin 时
+// 视为不可用（margin <= 0 表示不要求剩余期）。
+func cachedHoliday(now time.Time, margin time.Duration) (Holiday, bool) {
+	c, err := loadCache()
 	if err != nil {
 		return Holiday{}, false
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Holiday{}, false
-	}
-
-	var c holidayCache
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return Holiday{}, false
-	}
-	if c.Version != cacheVersion {
-		return Holiday{}, false
-	}
-
 	rest, festivals := eventMaps(c.Events)
 	h, err := selectHoliday(rest, festivals, now)
 	if err != nil {
 		return Holiday{}, false
 	}
+	if margin > 0 && lastEventDate(c.Events).Sub(startOfDay(now)) <= margin {
+		return Holiday{}, false
+	}
 	return h, true
 }
 
-// writeCache 把接口返回整理成记录列表后落盘，不保留原始响应。
-func writeCache(r holidayResponse) {
+// loadCache 读取并通过版本检查后的缓存。
+// 错误保留给调用方判断（文件缺失、JSON 损坏、版本不符）。
+func loadCache() (holidayCache, error) {
 	path, err := cachePath()
 	if err != nil {
-		return
+		return holidayCache{}, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return holidayCache{}, err
+	}
+
+	var c holidayCache
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return holidayCache{}, err
+	}
+	if c.Version != cacheVersion {
+		return holidayCache{}, fmt.Errorf("缓存版本 %d，期望 %d", c.Version, cacheVersion)
+	}
+	return c, nil
+}
+
+// writeCache 把接口返回整理成记录列表后落盘。
+func writeCache(r holidayResponse) error {
+	path, err := cachePath()
+	if err != nil {
+		return err
 	}
 	c := holidayCache{
 		Version: cacheVersion,
@@ -320,9 +384,9 @@ func writeCache(r holidayResponse) {
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(path, raw, 0o644)
+	return os.WriteFile(path, raw, 0o644)
 }
 
 func cachePath() (string, error) {
@@ -333,7 +397,7 @@ func cachePath() (string, error) {
 	return filepath.Join(dir, "holiday-cache.json"), nil
 }
 
-// startOfDay 把时间截到当天 0 点，日期差按自然日计算。
+// startOfDay 返回传入时间戳对应日期的 0 点。
 func startOfDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }

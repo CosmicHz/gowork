@@ -7,7 +7,7 @@ import (
 
 // writeHelp 输出 gowork 的帮助。选项部分手写而不是交给 pflag.FlagUsages：
 // 它会把布尔项写成 [=true|false]、用 Go 类型当占位符，也描述不了
-// 短选项别名、组合写法、索引短选项和子命令（init / complete）。
+// 短选项别名、组合写法、索引短选项和子命令（init / complete / prepare）。
 // 左列保持纯 ASCII，才能用 len 对齐；中文说明放在右列，不参与列宽计算。
 // showSubcommands 为 false 时（经 shell 函数调用）不列子命令：那个位置被内部参数占住了。
 func writeHelp(w io.Writer, showSubcommands bool) {
@@ -29,6 +29,7 @@ func writeHelp(w io.Writer, showSubcommands bool) {
 		writeHelpRows(w, [][2]string{
 			{"init <SHELL>", "输出 shell 集成代码：powershell、zsh、sh、fish"},
 			{"complete <KIND>", "输出补全候选：projects（供 shell 补全使用）"},
+			{"prepare", "检查节假日缓存，快过期时提前更新"},
 		})
 	}
 	fmt.Fprint(w, "\n只允许用一种方式指定一个项目。\n")

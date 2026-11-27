@@ -7,12 +7,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 
 	"gowork/internal/clone"
 	"gowork/internal/config"
 	"gowork/internal/console"
+	"gowork/internal/holiday"
 	"gowork/internal/project"
 	"gowork/internal/render"
 	"gowork/internal/shell"
@@ -420,12 +422,42 @@ func runSubcommand(args []string, con *console.Console) (bool, error) {
 	case "complete":
 		// 输出会被 shell 解析，必须原样写出。
 		return true, completeSubcommand(rest[i+1:], con.Writer(console.SourceRaw))
+	case "prepare":
+		return true, prepareSubcommand(rest[i+1:], con)
 	}
 	return false, nil
 }
 
+// exitCodeError 让子命令指定退出码；没有指定时按参数错误（2）处理。
+type exitCodeError struct {
+	code int
+	err  error
+}
+
+func (e exitCodeError) Error() string { return e.err.Error() }
+
+func (e exitCodeError) Unwrap() error { return e.err }
+
+// prepareSubcommand 检查节假日缓存，快用完时提前抓取，避免下次运行请求接口。
+func prepareSubcommand(args []string, con *console.Console) error {
+	if len(args) > 0 {
+		return errors.New("prepare 不接受参数")
+	}
+	now := time.Now()
+	h, refreshed, err := holiday.Prepare(now)
+	if err != nil {
+		return exitCodeError{code: 1, err: fmt.Errorf("准备失败：%w", err)}
+	}
+	if refreshed {
+		con.Println(console.SourceDefault, "已更新节假日缓存：", holiday.Line(h, now))
+		return nil
+	}
+	con.Println(console.SourceDefault, "节假日缓存仍然可用：", holiday.Line(h, now))
+	return nil
+}
+
 // findSubcommand 返回子命令在用户参数里的位置；没有则返回 -1。
-// 跳过选项及其取值，`--` 之后不看；只有第一个位置参数是 init / complete 才算，
+// 跳过选项及其取值，`--` 之后不看；只有第一个位置参数是 init / complete / prepare 才算，
 // 所以 `gowork -n init sh` 可用，而 `gowork my-app init` 不会当成子命令。
 func findSubcommand(fs *pflag.FlagSet, args []string) int {
 	for i := 0; i < len(args); i++ {
@@ -434,7 +466,7 @@ func findSubcommand(fs *pflag.FlagSet, args []string) int {
 			return -1
 		}
 		if !isFlagToken(arg) {
-			if arg == "init" || arg == "complete" {
+			if arg == "init" || arg == "complete" || arg == "prepare" {
 				return i
 			}
 			return -1
@@ -482,7 +514,12 @@ func Main(args []string) {
 	// 里的名字仍是项目名，不会走到这里。
 	if handled, err := runSubcommand(args, con); handled {
 		if err != nil {
-			con.Fail(err, 2)
+			code := 2
+			var ec exitCodeError
+			if errors.As(err, &ec) { // 子命令要求指定退出码
+				code = ec.code
+			}
+			con.Fail(err, code)
 		}
 		return
 	}

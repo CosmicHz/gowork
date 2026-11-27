@@ -24,7 +24,7 @@
    `-Project` / `-IndentSize` / `-Workspace`，其余参数原样透传。
 2. `cmd/gowork/main.go`：只调用 `cli.Main(os.Args)`。
 3. `cli.Main`：`console.New()`（绑定 stdout/stderr 并开启 VT）→ `runSubcommand` 找
-   `init` / `complete` 并直接返回 → `config.Load()` →
+   `init` / `complete` / `prepare` 并直接返回 → `config.Load()` →
    `parseWith`（内部先 `checkIndexArgs`，再 `pflag.Parse`）。
 4. `cli.Run`：`cfg.ResolveWorkspace` → `render.New(opts, con)` → `project.List` →
    若参数像仓库地址则 `clone.Project(..., con)` 并重扫项目，否则 `project.Resolve`。
@@ -34,7 +34,8 @@
    **不切换目录**。
 
 注意：生成的函数把 `--cwd-file` 与 `--__i-am-a-shell-function` 放在用户参数之前。
-`runSubcommand` 看到标记就直接放弃所有子命令，所以 `work init` / `work complete` 是**项目名**。
+`runSubcommand` 看到标记就直接放弃所有子命令，所以 `work init` / `work complete` /
+`work prepare` 是**项目名**。
 直接运行时选项可以写在子命令前面（如 `gowork -n init sh`），但子命令前后都不能指定项目：
 `--project` / `--recent` / `-N` 会直接报错，不会静默丢掉。子命令必须是第一个位置参数，
 所以 `gowork my-app init` 不会当成子命令，`gowork --project init` 里的 init 只是项目名。
@@ -44,7 +45,7 @@
 ```text
 cmd/gowork/            入口，只把 os.Args 交给 internal/cli
 internal/
-  cli/                 参数解析、索引短选项校验（checkIndexArgs）、编排（Main / Run）、complete 子命令
+  cli/                 参数解析、索引短选项校验（checkIndexArgs）、编排（Main / Run）、init / complete / prepare 子命令
   config/              工作区优先级、配置文件、缓存目录；平台相关的提示文案
   console/             控制台唯一出口：stdout/stderr、ANSI 颜色与调色板、清屏、窗口标题、失败退出
   project/             List、Resolve、IndexPattern、prefixMatches、GitInfo
@@ -248,7 +249,14 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
 - 缓存：`holiday-cache.json`，结构 `{version: 4, events: [{date, name, type}]}`。
   存的是整理后的事件列表，不是接口原文；读取时用同一套挑选逻辑重新算。
   只有全部事件都过去（挑不出结果）才重新请求；请求失败不写缓存。
-- 调用预算：正常一次运行最多一次 HTTP 请求（超时 5s），其余时间走缓存。
+- 读取拆成 `loadCache`（保留具体错误）与 `cachedHoliday(now, margin)`：
+  `readCache` = `cachedHoliday(now, 0)`，普通启动只要还有未来事件就复用；
+  `usableCache` = `cachedHoliday(now, prepareMargin)`，最晚事件距今不足 7 天才算
+  「快用完」。`writeCache` 返回错误：`Next` 忽略，`Prepare` 上报。
+- `prepare` 是只读旁路：缓存剩余覆盖期够就只打印「缓存仍然可用」，快用完或缓存
+  不可用时才请求接口并写盘；抓取/写盘失败退出 1，参数错误（带多余参数）退出 2。
+- 调用预算：正常一次运行最多一次 HTTP 请求（超时 5s），其余时间走缓存；`prepare`
+  在缓存充足时不发请求。
 - 图标按名称关键字匹配（元旦🎉、春节🧧、清明🌿、劳动🔧、端午🐉、中秋🥮、国庆🇨🇳 等），
   未命中用 📅。
 - 已知限制：新一年放假安排公布前，接口只有公历/农历节日，没有法定放假数据；
@@ -301,9 +309,11 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   构建目标 `./cmd/gowork`）。
 - 平台映射：`uname -s` 的 Linux / Darwin，`uname -m` 的 x86_64 / aarch64；Windows 读
   `PROCESSOR_ARCHITECTURE`（优先 `PROCESSOR_ARCHITEW6432`）。其他系统或架构报错并提示源码构建。
-- release 选择：默认 `/releases/latest`（只返回正式版，draft 与预发布都被跳过）；
-  `--pre-release` / `-PreRelease` 时改用 `/releases` 列表第一条（未认证列表不含 draft，
-  但包含预发布）。默认路径没有正式版时报错并提示加 `--pre-release`。发布只上传版本化文件名，
+- release 选择：默认先查 `/releases/latest`（只返回正式版，draft 与预发布都被跳过）；
+  取不到时回退到 `/releases` 列表第一条（未认证列表不含 draft，但包含预发布），并提示
+  「未找到正式版本，改用最新发布版本 <tag>」。`--pre-release` / `-PreRelease` 直接走列表。
+  两次请求都失败、列表为空、列表有数据但没有 `tag_name` 分别给出不同的错误。
+  发布只上传版本化文件名，
   所以资产名靠 tag 拼出来；`release.yml` 按 tag 里的 `-` 自动设置 `prerelease`。
 - 默认目录：`~/.local/bin`（macOS / Linux）、`%LOCALAPPDATA%\gowork\bin`（Windows）；
   `--bin-dir` / `-BinDir` 可改，shell 脚本还认 `GOWORK_BIN_DIR`。`--no-modify` / `-NoModify`
@@ -381,7 +391,14 @@ go test ./...
   隐藏目录/文件跳过、工作区不存在时无输出；`completeSubcommand` 的用法错误与
   环境变量指定工作区后的成功路径；`TestRunSubcommand` 钉住子命令前的普通选项可用、
   项目选择器报错、shell 标记会让所有子命令失效，
-  shell 注入内部参数后 `complete` / `init` 按项目名处理。
+  shell 注入内部参数后 `complete` / `init` / `prepare` 按项目名处理。
+- `internal/cli/prepare_test.go`：`prepare` 带多余参数报错；缓存充足时走完
+  `runSubcommand` 分发并输出「仍然可用」（缓存目录用环境变量指到临时目录）。
+- `internal/holiday/cache_test.go`：`TestCachedHolidayMargin` 钉住 7 天边界，
+  `TestCachedHolidayRejectsBrokenCache` 覆盖版本不符 / JSON 损坏 / 全部过期；
+  `TestPrepareReusesUsableCache` 用会报错的 Transport 证明缓存充足时不联网，
+  `TestPrepareRefreshesExpiringCache` 用替换 `http.DefaultTransport` 的桩验证刷新与
+  写盘，`TestPrepareFetchError` 验证接口失败即报错。
 - `install_test.sh`（仓库根目录）：不执行安装，只 source `install.sh` 里
   `# ---- 主流程 ----` 之前的函数；覆盖 hook 类型识别、配置命令检测、只改最后一个与去重
   （含 CRLF），以及无终端时 `setup_env` 默认只改最后一个。有可用终端时跳过 `setup_env` 用例，避免阻塞。
@@ -438,10 +455,11 @@ go test ./...
    解析阶段的 `project.Resolve` 仍按索引优先，因此工作区里真有同名目录时只提示、
    不改变行为；`./-1` 是精确写法，直接二进制或 POSIX shell 也可以用 `-- -1`
    （PowerShell 会丢掉 `--`，pwsh 用 `./-1`）。
-8. **子命令只在直接运行时生效**（`init`、`complete`），且必须是第一个位置参数。
+8. **子命令只在直接运行时生效**（`init`、`complete`、`prepare`），且必须是第一个位置参数。
    shell 函数注入 `--__i-am-a-shell-function`，`runSubcommand` 看到标记就直接
    放弃所有子命令。子命令前可以写普通选项（如 `-n`），但 `--project` / `--recent` / `-N`
-   无论写在子命令前后都会报错，而不是被丢掉；`work init` / `work complete` 里的名字是项目名。
+   无论写在子命令前后都会报错，而不是被丢掉；`work init` / `work complete` /
+   `work prepare` 里的名字是项目名。
 9. **PowerShell 输出管线会吞 ANSI**。必须用 `Start-Process -NoNewWindow` 让子进程直接写主机；
    也因此 `$x = work` 捕获不到仪表盘（这是预期行为）。
 10. **沙箱内跑测试会假失败**。凡是起 `git` 子进程或依赖临时目录权限的用例，都要在沙箱外执行。
@@ -490,6 +508,8 @@ go test ./...
   加子命令默认不需要改 shell 模板。只有当子命令必须能通过 `work` 调用时，才要改所有
   shell 模板（sh / zsh / fish / powershell），并补对应 shell 测试。
   新增只读旁路时优先复用 `config.Load` + `project.List`。
+  子命令的参数错误统一退出 2；需要业务退出码时（如 `prepare` 抓取失败退出 1）用
+  `exitCodeError` 包装，`Main` 用 `errors.As` 取码。
 - 改 release 产物命名或打包结构：同步 `install.sh` / `install.ps1` 的资产名拼接、解压路径，
   以及 `checksums.txt` 的校验逻辑。
 - 改安装脚本的 PATH / shell 配置行为：同步 README 的「自动修改的位置」、本节说明与配置命令格式。
@@ -500,7 +520,6 @@ go test ./...
 - 新一年法定排期公布前只有节日兜底，不预测放假安排。
 - 安装脚本默认下载最新 release，只覆盖 linux / darwin / windows 的 amd64 / arm64；
   其他平台或需要最新源码时用 `--from-source` / `-FromSource`，此时需要本机 Go。
-- 一键脚本默认只装最新正式版；加 `--pre-release` / `-PreRelease` 才装最新预发布版本。
 - 一键脚本只自动配置当前 shell（`$SHELL` 对应的 rc / PowerShell 的 `$PROFILE`）；
   其他 shell 需要手动加同样的两行；`--no-modify` / `-NoModify` 可以完全不改环境。
 - Windows 上的 fish 不在 CI 覆盖范围（Linux / macOS 覆盖）。
@@ -508,3 +527,7 @@ go test ./...
   `-Workspace`（含无歧义缩写），其余原生参数（`--recent`、`--no-color`、短选项等）靠透传，
   已经可用。目标是再给所有原生参数提供 pwsh 风格别名（如 `-Recent` / `-NoColor`），
   并与原生参数一一对应；实现时同步模板、测试与 README。
+- **索引同名的提示文案（待改）**：`-N` 与目录同名 / 同前缀时，提示末尾两行
+  「要进入同名目录请写 work ./-1」与「要进入这些目录请写完整名，如 work ./-114514」
+  分别对应「同名」和「同前缀」两种情况，连着读很难看出哪条对应哪个目录。
+  需要重写：按候选逐条给出写法，或明确标注哪些是同名、哪些只是前缀命中。

@@ -511,8 +511,8 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
 
 ### 子命令与目录同名
 
-`gowork init <shell>`（输出 shell 集成代码）与 `gowork complete projects`（供补全使用的内部子命令）都只在直接运行 `gowork` 时生效。shell 函数会注入一个内部标记，标记存在时所有子命令都不生效，所以 `work init` / `work complete` 里的名字是项目名。
-工作区里若真有名为 `init` 或 `complete` 的目录，`work init` / `work complete` 会直接进入它。
+`gowork init <shell>`（输出 shell 集成代码）、`gowork complete projects`（供补全使用的内部子命令）与 `gowork prepare`（提前检查并更新节假日缓存）都只在直接运行 `gowork` 时生效。shell 函数会注入一个内部标记，标记存在时所有子命令都不生效，所以 `work init` / `work complete` / `work prepare` 里的名字是项目名。
+工作区里若真有名为 `init`、`complete` 或 `prepare` 的目录，`work init` / `work complete` / `work prepare` 会直接进入它。
 
 ### 选项名与目录同名
 
@@ -563,13 +563,15 @@ Windows 的 `work` 同时接受上表列出的 PowerShell 风格和 getopt 风�
   macOS `~/Library/Caches/gowork/holiday-cache.json`、Linux `~/.cache/gowork/holiday-cache.json`。
   缓存里是整理后的节日列表（日期、名称、类型）；只要其中还有未来的节日就直接复用，
   全部过去后才重新查询——接口有调用频率限制，不宜每次都请求。
+- 想提前检查缓存可以运行 `gowork prepare`：缓存剩余覆盖期还够（最晚一条距今超过 7 天）
+  时直接复用，否则请求网络接口并重新缓存；抓取或写盘失败时报错并退出 1。
 
 ### 退出码与失败行为
 
 | 码 | 含义 |
 | --- | --- |
 | 0 | 成功（并写入目标目录，shell 函数据此 `Set-Location` / `cd`） |
-| 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名、配置文件损坏 |
+| 1 | 业务错误：目录不存在、索引越界、克隆失败、未配置工作区、推断不出仓库名、配置文件损坏、`gowork prepare` 抓取失败 |
 | 2 | 参数错误，例如 `--indent` 小于 3、`init` 指定了不支持的 shell。各 shell 一致 |
 
 失败时统一**不切换目录**，错误写到 stderr（终端下为红字）。解析阶段的失败不清屏（保留现场），
