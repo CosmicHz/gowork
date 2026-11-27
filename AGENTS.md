@@ -371,6 +371,13 @@ go vet ./...
 go test ./...
 ```
 
+- **测试默认封锁网络**：所有带测试的包都在 `TestMain` 里调用 `testnet.Block`
+  （`internal/testnet`），默认 Transport 在测试中会 panic——任何真实 HTTP 请求都会让用例
+  失败，而不是悄悄联网。需要假响应时自定义 Transport，或用 `httptest.Server` 的
+  `srv.Client()`；确实要访问真实网络时调用 `testnet.AllowReal(t)`，并且必须设置
+  `GOWORK_TEST_NET=1`（否则该用例 skip），且不能与 `t.Parallel` 同用。
+  `internal/testnet` 会扫描 `internal/` 与 `cmd/`，新增测试包若没接封锁会直接报错。
+  只覆盖走默认 Transport 的请求，`git` 子进程与裸 socket 不在范围内。
 - **在沙箱外跑测试**：沙箱内 `git` 子进程受限，`TestGitInfo` 等会假失败。
 - `internal/cli/cli_test.go` 的 `TestOptionsAfterProjectAreParsed` 钉住项目名后的选项：
   项目名之后的 `-n` 必须生效。`TestParseRejectsProjectWithTargetFlag` 钉住
