@@ -210,7 +210,12 @@ func TestListFollowsDirLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	linkDir(t, real, filepath.Join(root, "link"))
+	link := filepath.Join(root, "link")
+	linkDir(t, real, link)
+	// 创建成功不代表能跟随：沙箱或杀软可能改写链接目标，跟随失败时跳过。
+	if _, err := os.Stat(link); err != nil {
+		t.Skipf("当前环境无法跟随目录符号链接：%v", err)
+	}
 	if got, want := projectNames(List(root)), []string{"link"}; !slices.Equal(got, want) {
 		t.Errorf("指向目录的链接应算项目，得到 %v", got)
 	}

@@ -59,8 +59,13 @@ func TestListFollowsJunction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(root, "link"), real).CombinedOutput(); err != nil {
+	link := filepath.Join(root, "link")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, real).CombinedOutput(); err != nil {
 		t.Fatalf("创建目录联接失败：%v\n%s", err, out)
+	}
+	// 创建成功不代表能跟随：沙箱或杀软可能改写链接目标，跟随失败时跳过。
+	if _, err := os.Stat(link); err != nil {
+		t.Skipf("当前环境无法跟随目录联接（杀软或沙箱改写目标）：%v", err)
 	}
 	if got, want := projectNames(List(root)), []string{"link"}; !slices.Equal(got, want) {
 		t.Errorf("指向目录的目录联接应算项目，得到 %v", got)

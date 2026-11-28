@@ -417,6 +417,8 @@ go test ./...
     `SeCreateSymbolicLinkPrivilege` 重试，仍建不了就 skip，不退回目录联接。
   - `TestListFollowsJunction`（仅 Windows）固定用 `mklink /J`，
     保证符号链接用例因权限跳过时，「链接指向目录算项目」仍然有覆盖。
+  - 两个用例在建链成功后都会再 `os.Stat` 一次，确认链接**能跟随**；跟随失败就 skip
+    （原因见坑 19）。
 - `internal/sysinfo/sysinfo_test.go` 的 `TestColorEnabled` 钉住颜色开关的三个条件。
 - `internal/console/console_test.go`：`Paint` 的三种颜色开关、带来源标识的 `Transform`
   对 `Print` / `Println` / `Writer` 的统一加工、`TestRawSourceBypassesTransform` 钉住
@@ -494,6 +496,13 @@ go test ./...
    各查一次，光路径解析就花了近 1 s。现在只 `LookPath` 一次并传绝对路径，分支与变更
    也合并成一条 `git status --porcelain=v2 --branch`。新增子进程调用时同样要先拿到
    绝对路径，不要反复用裸命令名。
+19. **链接创建成功不等于能跟随**。Trae 的命令执行沙箱会在写入侧改写路径：`mklink` 报成功，
+   但 `fsutil reparsepoint query` 的 Substitute Name 指向沙箱内部的 overlay 目录，
+   该目录并不存在。于是 `GetFileAttributesEx` 能取到 `DIRECTORY|REPARSE_POINT`，
+   `CreateFile` 跟随却报「找不到路径」，`project.List` 因 `os.Stat` 失败把条目丢掉，
+   链接用例表现为「创建成功、List 为空」。这不是 Go 或 List 的问题——cmd / PowerShell
+   同样跟不进去。测试应在建链后再 `os.Stat` 一次，失败就 skip；要真正跑通，
+   在 IDE 外的普通终端执行。杀软开着时还会在前面一步就报 `Access is denied`。
 
 ## 改动时的连带点
 
