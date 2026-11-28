@@ -390,7 +390,7 @@ func writeCache(r holidayResponse) error {
 }
 
 func cachePath() (string, error) {
-	dir, err := config.Dir()
+	dir, err := config.CacheDir()
 	if err != nil {
 		return "", err
 	}

@@ -7,8 +7,9 @@
 
 - 跨 Windows / macOS / Linux（含 WSL）的项目跳板 + 环境仪表盘。
 - 全部逻辑在一个 Go 二进制里（`gowork.exe` / `gowork`），无外部运行时依赖；`go.mod` 要求 Go 1.26.5。
-- 只有四个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）、
-  `github.com/spf13/pflag`（命令行解析）与 `github.com/0magnet/lolcat-go`（彩虹主色）。
+- 五个依赖：`golang.org/x/term`（终端宽度判断）、`golang.org/x/sys`（Windows 控制台、磁盘空间）、
+  `github.com/spf13/pflag`（命令行解析）、`github.com/0magnet/lolcat-go`（彩虹主色）与
+  `github.com/BurntSushi/toml`（读取 `config.toml`）。
 - 代码按领域分包：`cmd/gowork` 只把 `os.Args` 转给 `internal/cli`，其余都在 `internal/` 下（`cli`、`config`、`console`、`project`、`render`、`holiday`、`clone`、`shell`、`sysinfo`）。
 - shell 侧只有一层壳：`gowork init <shell>` 打印函数代码（zsh 还带补全），用户在配置里 `eval` / `source`。
   仓库里不存放启动器脚本；`bin/` 是构建产物目录，已被 gitignore。
@@ -100,12 +101,11 @@ transform 是通用钩子，
 transform 照常执行；它不替代任何已有语义来源，也应尽量少用。`help` 当前不做处理。
 主色有一定的概率换成彩虹：需要主色效果时用 `AccentPaint`（抽中彩虹就交给 `lolcat-go`
 逐字符上色，否则整段单色），`Paint` 只按调用方传入的颜色上色、不认主色；
-`SetAccent` 显式指定颜色会关掉彩虹模式。概率与推进速度来自 `config.json` 的
-`rainbow_chance` / `rainbow_freq` / `rainbow_spread` / `rainbow_phase_step`
-（默认 0.05 / 0.2 / 1.0 / 2.0），由 `cli.Main` 在解析完配置后用 `SetRainbow`
-覆盖（`console.RainbowOptions`，默认值引用 `config.DefaultRainbow*`）。
-横向速度按 `rainbow_freq` / `rainbow_spread` 控制（约 31 个字符一轮），
-`rainbow_phase_step` 让相邻两段纵向错开相位，避免所有行
+`SetAccent` 显式指定颜色会关掉彩虹模式。概率与推进速度来自 `config.toml` 的 `[rainbow]`
+（`chance` / `freq` / `spread` / `phase_step`，默认 0.05 / 0.2 / 1.0 / 2.0），由 `cli.Main`
+在解析完配置后用 `SetRainbow` 覆盖（`console.RainbowOptions`，默认值引用 `config.DefaultRainbow*`）。
+横向速度按 `freq` / `spread` 控制（约 31 个字符一轮），
+`phase_step` 让相邻两段纵向错开相位，避免所有行
 共用同一条横向渐变。`rainbowOS` 是整次运行共用的起始偏移（相当于 lolcat 的 seed），
 纵向相位取当前行号；因此同一行的所有彩色片段颜色一致，换行后才会变化。
 **彩色文本必须一次一行**：一次调用写多行时，`lol.String` 内部每行只把偏移 +1
@@ -124,20 +124,23 @@ transform 照常执行；它不替代任何已有语义来源，也应尽量少�
 
 ### 工作区与配置
 
-工作区解析优先级：`--workspace` > `GOWORK_WORKSPACE` > `config.json.workspace`。
-配置与缓存共用 `os.UserCacheDir()/gowork`：Windows `%LOCALAPPDATA%\gowork`、
-macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
+工作区解析优先级：`--workspace` > `GOWORK_WORKSPACE` > `config.toml` 的 `workspace`。
+配置在 `os.UserConfigDir()/gowork`（Windows `%APPDATA%\gowork`、macOS
+`~/Library/Application Support/gowork`、Linux/WSL `~/.config/gowork`）；
+缓存（`holiday-cache.json`）在 `os.UserCacheDir()/gowork`（Windows `%LOCALAPPDATA%\gowork`、
+macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`）。
 三者都没有时报错，不猜默认路径。
 
-`config.json` 还配置仪表盘：`indent`、`no_color`、`recent_limit`、`recent_name_width`、
-`disk_warn_gb`、`show_disk`、`show_git`、`show_holiday`、`show_recent`、`clear_screen`、
-`rainbow_chance`、`rainbow_freq`、`rainbow_spread`、`rainbow_phase_step`、`quotes`。
-`load` 先取 `DefaultConfig()` 再 `json.Unmarshal`：缺省字段保留默认值，显式 `0/false`
-覆盖默认值，所以 `Config` 字段是普通值、不再用指针。`Config.Validate()` 拦越界值
-（缩进 ≥3、`recent_limit` ≥1、名称宽度 ≥5、磁盘阈值 ≥0、彩虹概率 0–1、
-彩虹频率与行距 ≥0、彩虹扩散 >0、格言非空），错误信息带实际值。
-`cli.parseWith` 以配置为默认，`--indent` / `--no-color` 覆盖。配置 JSON 损坏或越界会报错，
-不静默忽略。
+`config.toml` 分两层：顶层 `workspace` / `indent` / `no_color` / `clear_screen` / `quotes`，
+其余按仪表盘的行分表——`[disk]`（`show` / `warn_gb`）、`[git].show`、`[holiday].show`、
+`[recent]`（`show` / `limit` / `name_width`）、`[rainbow]`（`chance` / `freq` / `spread` /
+`phase_step`）。文件结构由 `fileConfig` 描述，标量与表一律用指针：`nil` 表示没写、保持默认值，
+显式 `0/false` 也能覆盖默认值；`fileConfig.apply` 把文件值摊平成运行期的 `Config`，
+所以命令行与渲染只看到扁平字段。`Config.Validate()` 拦越界值
+（缩进 ≥3、`recent.limit` ≥1、名称宽度 ≥5、磁盘阈值 ≥0、彩虹概率 0–1、
+彩虹频率与行距 ≥0、彩虹扩散 >0、格言非空），错误信息带实际值并使用 TOML 写法。
+未知键静默忽略；TOML 语法错误与越界值会报错，不静默使用部分配置。
+`cli.parseWith` 以配置为默认，`--indent` / `--no-color` 覆盖。
 
 ### 项目扫描与匹配
 
@@ -224,9 +227,9 @@ macOS `~/Library/Caches/gowork`、Linux/WSL `~/.cache/gowork`。
   回工作区根目录不加。
 - 行：时间（中文星期、24h）、位置（切换前的目标）、项目数、可用空间（`可用 / 总量`
   加卷标识，如 `114.0 GB / 514.0 GB  (C:)`；根挂载点写作 `(根分区)`；可用低于
-  `disk_warn_gb`（默认 10 GB）变红，取不到整行不显示）、Git（非仓库整行不显示）、
-  节日、最近活跃（默认前 `recent_limit` 个，名字按显示宽度截到
-  `recent_name_width` 列，后接 `MM-dd HH:mm`）。
+  `[disk].warn_gb`（默认 10 GB）变红，取不到整行不显示）、Git（非仓库整行不显示）、
+  节日、最近活跃（默认前 `[recent].limit` 个，名字按显示宽度截到
+  `[recent].name_width` 列，后接 `MM-dd HH:mm`）。
 - `rule` 宽度 = `min(终端宽度, 100) - 2*缩进`，只封顶，不设下限。
 - 问候语按小时分段；底部从格言表（默认内置，可由 `quotes` 覆盖）随机取一条。
 - `runeWidth` 是 East Asian Width 的近似：控制字符与组合字符 0 列，CJK/全角/emoji 2 列，
@@ -505,6 +508,8 @@ go test ./...
 - 加命令行选项：在 `internal/cli/registerFlags` 里用 pflag 的 `XxxVarP` 注册（带值选项
   不要设 `NoOptDefVal`）；短选项直接写在 shorthand 参数里；在 `internal/cli/help.go`
   的表格里补说明。索引短选项与同名提示会自动从注册信息读取取值规则。
+- 加配置项：同时改 `Config`、`fileConfig`（TOML 分层与指针字段）、`Validate`
+  与 README 的配置表；默认值只放在 `DefaultConfig`。
 - 改渲染：`internal/render/render_test.go` 覆盖文案与宽度；注意清屏顺序和 tty 门控。
   默认值统一走 `render.DefaultOptions()` + `config.Default*` / `config.Min*`，不要在 render 里复制常量。
 - 改入口或新增子命令：`cmd/gowork/main.go` 只做转发，逻辑落在 `internal/cli`；

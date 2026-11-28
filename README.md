@@ -69,7 +69,7 @@ work https://github.com/user/repo.git   # 克隆到工作区，然后进入
 - **按最近修改排序跳转**：通过 `-1`…`-9` 与 `--recent N` 选项进入第 N 个最近修改的项目，越界时提示有效范围。
 - **识别仓库地址**：参数[看起来像](#什么样的参数会被认为是仓库地址)仓库地址时，先 `git clone` 到工作区再进入；目录已存在则直接进入。
 
-工作区路径、缩进、颜色、显示哪些行、最近活跃数量、格言等配置都可以写进 `config.json`。（[所有配置项](#配置项)）
+工作区路径、缩进、颜色、显示哪些行、最近活跃数量、格言等配置都可以写进 `config.toml`。（[所有配置项](#配置项)）
 
 ### 仪表盘
 
@@ -98,7 +98,7 @@ work https://github.com/user/repo.git   # 克隆到工作区，然后进入
    | 时间 | 本地时间、中文星期、24 小时制 | — |
    | 位置 | 切换后的目录（渲染发生在切换之前，所以显示的正是目标） | — |
    | 项目 | 工作区下的项目数 | — |
-   | 可用空间 | 目标所在卷的可用 / 总量；括号内为盘符或挂载点（根挂载点写作「根分区」）。可用低于 `disk_warn_gb`（默认 10 GB）显示为红色 | 整行不显示 |
+   | 可用空间 | 目标所在卷的可用 / 总量；括号内为盘符或挂载点（根挂载点写作「根分区」）。可用空间过低时显示为红色 | 整行不显示 |
    | Git | 当前分支（空则显示 `detached`）· 改动数量（`git status --porcelain=v2 --branch` 中除 `#` 开头元信息外的行数） | 非仓库或无 git → 整行不显示 |
    | 节日 | 见[节假日](#节假日) | 显示 `数据获取失败⚠️` |
 
@@ -111,13 +111,12 @@ work https://github.com/user/repo.git   # 克隆到工作区，然后进入
          节日        元旦🎉  还有 76 天  (放假 3 天)
    ```
 
-4. **最近活跃**：按修改时间倒序前 `recent_limit`（默认 4）个；名字按显示宽度截到
-   `recent_name_width`（默认 35，超出则留 3 列给 `...`）列，后接 `MM-dd HH:mm`。
+4. **最近活跃**：倒序显示修改时间较近的几个目录名（如果名字太长会被截断），后接 `MM-dd HH:mm`。
    没有项目时整段不显示。
 
    ```text
         最近活跃
-       1  gowork                              10-11 21:59
+       1  project_that_has_a_very_long_nam... 11-10 11:57
        2  openclaw                            10-11 21:57
        3  deepseek-harness                    10-11 21:55
        4  lolcat                              10-11 21:17
@@ -362,7 +361,7 @@ rm install.sh
 | --- | --- |
 | 1 | 临时指定：`work -Workspace <路径>`（Windows）/ `work --workspace <路径>`（macOS / Linux） |
 | 2 | 环境变量 `GOWORK_WORKSPACE` |
-| 3 | 配置文件：Windows `%LOCALAPPDATA%\gowork\config.json`、macOS `~/Library/Caches/gowork/config.json`、Linux/WSL `~/.cache/gowork/config.json` |
+| 3 | 配置文件：Windows `%APPDATA%\gowork\config.toml`、macOS `~/Library/Application Support/gowork/config.toml`、Linux/WSL `~/.config/gowork/config.toml` |
 
 三者都没有时会报错，并按当前平台给出对应写法。
 
@@ -371,9 +370,9 @@ rm install.sh
 [Environment]::SetEnvironmentVariable('GOWORK_WORKSPACE', 'C:\Projects', 'User')
 
 # 或者配置文件
-$dir = "$env:LOCALAPPDATA\gowork"
+$dir = "$env:APPDATA\gowork"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-'{ "workspace": "C:\\Projects" }' | Set-Content "$dir\config.json" -Encoding utf8
+"workspace = 'C:\Projects'" | Set-Content "$dir\config.toml" -Encoding utf8
 ```
 
 ```sh
@@ -381,46 +380,55 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 export GOWORK_WORKSPACE="$HOME/Projects"
 
 # 或者配置文件
-mkdir -p ~/.cache/gowork
-printf '{ "workspace": "%s/Projects" }\n' "$HOME" > ~/.cache/gowork/config.json
+mkdir -p ~/.config/gowork
+printf "workspace = '%s/Projects'\n" "$HOME" > ~/.config/gowork/config.toml
 ```
 
 ### 配置项
+
+配置文件是 TOML：顶层放全局项，`[disk]` / `[git]` / `[holiday]` / `[recent]` / `[rainbow]`
+各管仪表盘的一块。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `workspace` | 无 | 工作区根目录；命令行与环境变量优先 |
 | `indent` | `3` | 左侧缩进空格数，最小 3；`--indent` 优先 |
 | `no_color` | `false` | 禁用颜色；`--no-color` 优先 |
-| `recent_limit` | `4` | 「最近活跃」列出的项目数，最小 1 |
-| `recent_name_width` | `35` | 「最近活跃」项目名截断宽度（显示列），最小 5 |
-| `disk_warn_gb` | `10` | 可用空间低于该值时标红；`0` 表示不标红 |
-| `show_disk` | `true` | 是否显示「可用空间」行 |
-| `show_git` | `true` | 是否显示「Git」行 |
-| `show_holiday` | `true` | 是否显示「节日」行 |
-| `show_recent` | `true` | 是否显示「最近活跃」 |
 | `clear_screen` | `true` | 是否清屏（仅真实终端） |
-| `rainbow_chance` | `0.05` | 主色换成彩虹[^1]的概率（0–1）；`0` 表示不启用 |
-| `rainbow_freq` | `0.2` | 彩虹每列的相位推进（rad），越大变色越快 |
-| `rainbow_spread` | `1.0` | 彩虹相位的横向扩散，必须大于 0 |
-| `rainbow_phase_step` | `2.0` | 彩虹效果在相邻输出行之间错开的相位 |
 | `quotes` | 内置格言 | 底部格言的候选数组，随机取一条 |
+| `[disk].show` | `true` | 是否显示「可用空间」行 |
+| `[disk].warn_gb` | `10` | 可用空间低于该值时标红；`0` 表示不标红 |
+| `[git].show` | `true` | 是否显示「Git」行 |
+| `[holiday].show` | `true` | 是否显示「节日」行 |
+| `[recent].show` | `true` | 是否显示「最近活跃」 |
+| `[recent].limit` | `4` | 「最近活跃」列出的项目数，最小 1 |
+| `[recent].name_width` | `35` | 「最近活跃」项目名截断宽度（显示列），最小 5 |
+| `[rainbow].chance` | `0.05` | 主色换成彩虹[^1]的概率（0–1）；`0` 表示不启用 |
+| `[rainbow].freq` | `0.2` | 彩虹每列的相位推进（rad），越大变色越快 |
+| `[rainbow].spread` | `1.0` | 彩虹相位的横向扩散，必须大于 0 |
+| `[rainbow].phase_step` | `2.0` | 彩虹效果在相邻输出行之间错开的相位 |
 
-[^1]: 主色有小概率换成彩虹渐变色，`rainbow_*` 四项控制概率与推进速度；不想要时把 `rainbow_chance` 设为 `0`。
+[^1]: 主色有小概率换成彩虹渐变色，`[rainbow]` 的四项控制概率与推进速度；不想要时把 `[rainbow].chance` 设为 `0`。
 
-```json
-{
-  "workspace": "C:\\Projects",
-  "indent": 4,
-  "recent_limit": 6,
-  "disk_warn_gb": 20,
-  "show_git": false,
-  "clear_screen": false,
-  "quotes": ["保持简单。", "先跑起来，再变好。"]
-}
+```toml
+workspace = 'C:\Projects'
+indent = 4
+quotes = ["保持简单。", "先跑起来，再变好。"]
+
+[disk]
+warn_gb = 20
+
+[git]
+show = false
+
+[recent]
+limit = 6
+
+[rainbow]
+chance = 0
 ```
 
-配置文件损坏（JSON 语法错误或数值越界）会直接报错，不会静默使用部分配置。
+没写的项保持默认值；拼错的键会被忽略，值域非法则直接报错。
 
 ## 用法
 

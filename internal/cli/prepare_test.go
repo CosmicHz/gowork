@@ -36,7 +36,7 @@ func TestPrepareSubcommandReusesCache(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("LOCALAPPDATA", dir)
 
-	cacheDir, err := config.Dir()
+	cacheDir, err := config.CacheDir()
 	if err != nil {
 		t.Fatal(err)
 	}

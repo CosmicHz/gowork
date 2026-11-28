@@ -2,7 +2,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,10 +9,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // workspaceEnv 覆盖工作区的环境变量名。
 const workspaceEnv = "GOWORK_WORKSPACE"
+
+// 配置文件名，放在用户配置目录下的 gowork/ 里。
+const configFileName = "config.toml"
 
 const (
 	// DefaultIndent 是仪表盘默认左侧缩进；MinIndent 是允许的最小值。
@@ -33,27 +37,27 @@ const (
 )
 
 // Config 是从配置文件解析，补好默认值后的运行配置。
-// JSON 里没写的字段采用默认值，否则用填写的值
+// 配置文件没写的字段采用默认值，否则用填写的值
 type Config struct {
-	Workspace        string   `json:"workspace"`
-	Indent           int      `json:"indent"`
-	NoColor          bool     `json:"no_color"`
-	RecentLimit      int      `json:"recent_limit"`
-	RecentNameWidth  int      `json:"recent_name_width"`
-	DiskWarnGB       float64  `json:"disk_warn_gb"`
-	ShowDisk         bool     `json:"show_disk"`
-	ShowGit          bool     `json:"show_git"`
-	ShowHoliday      bool     `json:"show_holiday"`
-	ShowRecent       bool     `json:"show_recent"`
-	ClearScreen      bool     `json:"clear_screen"`
-	RainbowChance    float64  `json:"rainbow_chance"`
-	RainbowFreq      float64  `json:"rainbow_freq"`
-	RainbowSpread    float64  `json:"rainbow_spread"`
-	RainbowPhaseStep float64  `json:"rainbow_phase_step"`
-	Quotes           []string `json:"quotes"`
+	Workspace        string
+	Indent           int
+	NoColor          bool
+	RecentLimit      int
+	RecentNameWidth  int
+	DiskWarnGB       float64
+	ShowDisk         bool
+	ShowGit          bool
+	ShowHoliday      bool
+	ShowRecent       bool
+	ClearScreen      bool
+	RainbowChance    float64
+	RainbowFreq      float64
+	RainbowSpread    float64
+	RainbowPhaseStep float64
+	Quotes           []string
 }
 
-// DefaultConfig 返回默认配置。load 先以它为底稿，再让 JSON 覆盖显式字段。
+// DefaultConfig 返回默认配置。
 func DefaultConfig() Config {
 	return Config{
 		Indent:           DefaultIndent,
@@ -69,6 +73,86 @@ func DefaultConfig() Config {
 		RainbowFreq:      DefaultRainbowFreq,
 		RainbowSpread:    DefaultRainbowSpread,
 		RainbowPhaseStep: DefaultRainbowPhaseStep,
+	}
+}
+
+// fileConfig 是 config.toml 的结构：与显示相关的一组开关各自成表，其余是顶层标量。
+// 所有标量与表都用指针，nil 表示文件里没写，保留默认值；显式写 0 / false 也能覆盖默认值。
+type fileConfig struct {
+	Workspace   *string       `toml:"workspace"`
+	Indent      *int          `toml:"indent"`
+	NoColor     *bool         `toml:"no_color"`
+	ClearScreen *bool         `toml:"clear_screen"`
+	Quotes      []string      `toml:"quotes"`
+	Disk        *diskTable    `toml:"disk"`
+	Git         *gitTable     `toml:"git"`
+	Holiday     *holidayTable `toml:"holiday"`
+	Recent      *recentTable  `toml:"recent"`
+	Rainbow     *rainbowTable `toml:"rainbow"`
+}
+
+type diskTable struct {
+	Show   *bool    `toml:"show"`
+	WarnGB *float64 `toml:"warn_gb"`
+}
+
+type gitTable struct {
+	Show *bool `toml:"show"`
+}
+
+type holidayTable struct {
+	Show *bool `toml:"show"`
+}
+
+type recentTable struct {
+	Show      *bool `toml:"show"`
+	Limit     *int  `toml:"limit"`
+	NameWidth *int  `toml:"name_width"`
+}
+
+type rainbowTable struct {
+	Chance    *float64 `toml:"chance"`
+	Freq      *float64 `toml:"freq"`
+	Spread    *float64 `toml:"spread"`
+	PhaseStep *float64 `toml:"phase_step"`
+}
+
+// apply 把文件里写了的值覆盖到 c 上；没写的字段保持默认值。
+func (f fileConfig) apply(c *Config) {
+	set(&c.Workspace, f.Workspace)
+	set(&c.Indent, f.Indent)
+	set(&c.NoColor, f.NoColor)
+	set(&c.ClearScreen, f.ClearScreen)
+	if f.Quotes != nil {
+		c.Quotes = f.Quotes
+	}
+	if f.Disk != nil {
+		set(&c.ShowDisk, f.Disk.Show)
+		set(&c.DiskWarnGB, f.Disk.WarnGB)
+	}
+	if f.Git != nil {
+		set(&c.ShowGit, f.Git.Show)
+	}
+	if f.Holiday != nil {
+		set(&c.ShowHoliday, f.Holiday.Show)
+	}
+	if f.Recent != nil {
+		set(&c.ShowRecent, f.Recent.Show)
+		set(&c.RecentLimit, f.Recent.Limit)
+		set(&c.RecentNameWidth, f.Recent.NameWidth)
+	}
+	if f.Rainbow != nil {
+		set(&c.RainbowChance, f.Rainbow.Chance)
+		set(&c.RainbowFreq, f.Rainbow.Freq)
+		set(&c.RainbowSpread, f.Rainbow.Spread)
+		set(&c.RainbowPhaseStep, f.Rainbow.PhaseStep)
+	}
+}
+
+// set 在 src 非 nil 时把值写到 dst，避免每个字段都写一遍 if。
+func set[T any](dst, src *T) {
+	if src != nil {
+		*dst = *src
 	}
 }
 
@@ -93,9 +177,11 @@ func load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("读取配置文件 %s：%w", path, err)
 	}
 
-	if err := json.Unmarshal(raw, &c); err != nil {
+	var f fileConfig
+	if err := toml.Unmarshal(raw, &f); err != nil {
 		return Config{}, fmt.Errorf("解析配置文件 %s：%w", path, err)
 	}
+	f.apply(&c)
 	if err := c.Validate(); err != nil {
 		return Config{}, fmt.Errorf("配置文件 %s：%w", path, err)
 	}
@@ -108,25 +194,25 @@ func (c Config) Validate() error {
 		return fmt.Errorf("indent=%d 小于最小值 %d", c.Indent, MinIndent)
 	}
 	if c.RecentLimit < 1 {
-		return fmt.Errorf("recent_limit=%d 小于最小值 1", c.RecentLimit)
+		return fmt.Errorf("recent.limit=%d 小于最小值 1", c.RecentLimit)
 	}
 	if c.RecentNameWidth < MinRecentNameWidth {
-		return fmt.Errorf("recent_name_width=%d 小于最小值 %d", c.RecentNameWidth, MinRecentNameWidth)
+		return fmt.Errorf("recent.name_width=%d 小于最小值 %d", c.RecentNameWidth, MinRecentNameWidth)
 	}
 	if c.DiskWarnGB < 0 {
-		return fmt.Errorf("disk_warn_gb=%v 不能为负数", c.DiskWarnGB)
+		return fmt.Errorf("disk.warn_gb=%v 不能为负数", c.DiskWarnGB)
 	}
 	if c.RainbowChance < 0 || c.RainbowChance > 1 {
-		return fmt.Errorf("rainbow_chance=%v 必须在 0 到 1 之间", c.RainbowChance)
+		return fmt.Errorf("rainbow.chance=%v 必须在 0 到 1 之间", c.RainbowChance)
 	}
 	if c.RainbowFreq < 0 {
-		return fmt.Errorf("rainbow_freq=%v 不能为负数", c.RainbowFreq)
+		return fmt.Errorf("rainbow.freq=%v 不能为负数", c.RainbowFreq)
 	}
 	if c.RainbowSpread <= 0 {
-		return fmt.Errorf("rainbow_spread=%v 必须大于 0", c.RainbowSpread)
+		return fmt.Errorf("rainbow.spread=%v 必须大于 0", c.RainbowSpread)
 	}
 	if c.RainbowPhaseStep < 0 {
-		return fmt.Errorf("rainbow_phase_step=%v 不能为负数", c.RainbowPhaseStep)
+		return fmt.Errorf("rainbow.phase_step=%v 不能为负数", c.RainbowPhaseStep)
 	}
 	for i, q := range c.Quotes {
 		if strings.TrimSpace(q) == "" {
@@ -156,7 +242,7 @@ func (c Config) ResolveWorkspace(flagValue string) (string, error) {
 	return "", fmt.Errorf(`未配置工作区，任选一种方式：
   · 环境变量：%s
   · 配置文件：%s
-      { "workspace": "<工作区路径>" }
+      workspace = '<工作区路径>'
   · 临时指定：%s`, envHint(), path, tempFlagHint())
 }
 
@@ -177,9 +263,23 @@ func tempFlagHint() string {
 	return "work --workspace <工作区路径>"
 }
 
-// Dir 返回用户缓存目录下的 gowork（Windows 是 %LOCALAPPDATA%\gowork，
-// macOS 是 ~/Library/Caches/gowork，Linux/WSL 是 ~/.cache/gowork），配置与缓存共用。
-func Dir() (string, error) {
+// ConfigDir 返回用户配置目录下的 gowork（Windows 是 %APPDATA%\gowork，
+// macOS 是 ~/Library/Application Support/gowork，Linux/WSL 是 ~/.config/gowork）。
+func ConfigDir() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir = filepath.Join(dir, "gowork")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// CacheDir 返回用户缓存目录下的 gowork（Windows 是 %LOCALAPPDATA%\gowork，
+// macOS 是 ~/Library/Caches/gowork，Linux/WSL 是 ~/.cache/gowork），目前放节假日缓存。
+func CacheDir() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
@@ -192,9 +292,9 @@ func Dir() (string, error) {
 }
 
 func configPath() (string, error) {
-	dir, err := Dir()
+	dir, err := ConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "config.json"), nil
+	return filepath.Join(dir, configFileName), nil
 }

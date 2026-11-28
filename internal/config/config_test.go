@@ -10,7 +10,7 @@ import (
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.json")
+	path := filepath.Join(t.TempDir(), configFileName)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -18,24 +18,34 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestLoadAllFields(t *testing.T) {
-	path := writeConfig(t, `{
-		"workspace": "/work",
-		"indent": 5,
-		"no_color": true,
-		"recent_limit": 2,
-		"recent_name_width": 20,
-		"disk_warn_gb": 5.5,
-		"show_disk": false,
-		"show_git": false,
-		"show_holiday": false,
-		"show_recent": false,
-		"clear_screen": false,
-		"rainbow_chance": 0.5,
-		"rainbow_freq": 0.3,
-		"rainbow_spread": 2.0,
-		"rainbow_phase_step": 1.5,
-		"quotes": ["甲", "乙"]
-	}`)
+	path := writeConfig(t, `
+workspace = "/work"
+indent = 5
+no_color = true
+clear_screen = false
+quotes = ["甲", "乙"]
+
+[disk]
+show = false
+warn_gb = 5.5
+
+[git]
+show = false
+
+[holiday]
+show = false
+
+[recent]
+show = false
+limit = 2
+name_width = 20
+
+[rainbow]
+chance = 0.5
+freq = 0.3
+spread = 2.0
+phase_step = 1.5
+`)
 
 	c, err := load(path)
 	if err != nil {
@@ -51,21 +61,21 @@ func TestLoadAllFields(t *testing.T) {
 		t.Error("no_color 应为 true")
 	}
 	if c.RecentLimit != 2 {
-		t.Errorf("recent_limit = %d", c.RecentLimit)
+		t.Errorf("recent.limit = %d", c.RecentLimit)
 	}
 	if c.RecentNameWidth != 20 {
-		t.Errorf("recent_name_width = %d", c.RecentNameWidth)
+		t.Errorf("recent.name_width = %d", c.RecentNameWidth)
 	}
 	if c.DiskWarnGB != 5.5 {
-		t.Errorf("disk_warn_gb = %v", c.DiskWarnGB)
+		t.Errorf("disk.warn_gb = %v", c.DiskWarnGB)
 	}
 	if c.RainbowChance != 0.5 || c.RainbowFreq != 0.3 ||
 		c.RainbowSpread != 2.0 || c.RainbowPhaseStep != 1.5 {
-		t.Errorf("彩虹参数解析不对：%+v", c)
+		t.Errorf("rainbow 参数解析不对：%+v", c)
 	}
 	for name, got := range map[string]bool{
-		"show_disk": c.ShowDisk, "show_git": c.ShowGit,
-		"show_holiday": c.ShowHoliday, "show_recent": c.ShowRecent,
+		"disk.show": c.ShowDisk, "git.show": c.ShowGit,
+		"holiday.show": c.ShowHoliday, "recent.show": c.ShowRecent,
 		"clear_screen": c.ClearScreen,
 	} {
 		if got {
@@ -78,7 +88,7 @@ func TestLoadAllFields(t *testing.T) {
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	c, err := load(filepath.Join(t.TempDir(), "missing.json"))
+	c, err := load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil {
 		t.Fatalf("文件不存在不该报错：%v", err)
 	}
@@ -87,19 +97,29 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadInvalidJSON(t *testing.T) {
-	if _, err := load(writeConfig(t, `{"indent":`)); err == nil {
-		t.Fatal("坏 JSON 应报错")
+func TestLoadInvalidTOML(t *testing.T) {
+	if _, err := load(writeConfig(t, "indent = [")); err == nil {
+		t.Fatal("坏 TOML 应报错")
+	}
+}
+
+func TestLoadIgnoresUnknownKeys(t *testing.T) {
+	c, err := load(writeConfig(t, "indent = 4\nbogus = 1\n\n[unknown]\nx = true\n"))
+	if err != nil {
+		t.Fatalf("未知键应忽略：%v", err)
+	}
+	if c.Indent != 4 {
+		t.Errorf("已识别的键仍应生效，indent = %d", c.Indent)
 	}
 }
 
 func TestLoadKeepsDefaultsForOmittedFields(t *testing.T) {
-	c, err := load(writeConfig(t, `{"workspace": "/work"}`))
+	c, err := load(writeConfig(t, `workspace = "/work"`))
 	if err != nil {
 		t.Fatalf("解析配置失败：%v", err)
 	}
 	if c.Indent != DefaultIndent || c.RecentLimit != DefaultRecentLimit ||
-		c.DiskWarnGB != DefaultDiskWarnGB {
+		c.DiskWarnGB != DefaultDiskWarnGB || c.RecentNameWidth != DefaultRecentNameWidth {
 		t.Errorf("省略字段应保留默认值：%+v", c)
 	}
 	if c.RainbowChance != DefaultRainbowChance || c.RainbowFreq != DefaultRainbowFreq ||
@@ -112,7 +132,7 @@ func TestLoadKeepsDefaultsForOmittedFields(t *testing.T) {
 }
 
 func TestLoadExplicitZeroOverridesDefault(t *testing.T) {
-	c, err := load(writeConfig(t, `{"disk_warn_gb": 0}`))
+	c, err := load(writeConfig(t, "[disk]\nwarn_gb = 0\n"))
 	if err != nil {
 		t.Fatalf("解析配置失败：%v", err)
 	}
@@ -127,15 +147,15 @@ func TestLoadValidation(t *testing.T) {
 		content string
 		want    string
 	}{
-		{"缩进过小", `{"indent": 2}`, "indent=2"},
-		{"最近数量为 0", `{"recent_limit": 0}`, "recent_limit=0"},
-		{"名称宽度过小", `{"recent_name_width": 4}`, "recent_name_width=4"},
-		{"磁盘阈值为负", `{"disk_warn_gb": -1}`, "disk_warn_gb=-1"},
-		{"彩虹概率越界", `{"rainbow_chance": 1.5}`, "rainbow_chance=1.5"},
-		{"彩虹频率为负", `{"rainbow_freq": -1}`, "rainbow_freq=-1"},
-		{"彩虹扩散为 0", `{"rainbow_spread": 0}`, "rainbow_spread=0"},
-		{"彩虹行距为负", `{"rainbow_phase_step": -0.5}`, "rainbow_phase_step=-0.5"},
-		{"空格言", `{"quotes": ["ok", "  "]}`, "quotes[1]"},
+		{"缩进过小", "indent = 2", "indent=2"},
+		{"最近数量为 0", "[recent]\nlimit = 0", "recent.limit=0"},
+		{"名称宽度过小", "[recent]\nname_width = 4", "recent.name_width=4"},
+		{"磁盘阈值为负", "[disk]\nwarn_gb = -1", "disk.warn_gb=-1"},
+		{"彩虹概率越界", "[rainbow]\nchance = 1.5", "rainbow.chance=1.5"},
+		{"彩虹频率为负", "[rainbow]\nfreq = -1", "rainbow.freq=-1"},
+		{"彩虹扩散为 0", "[rainbow]\nspread = 0", "rainbow.spread=0"},
+		{"彩虹行距为负", "[rainbow]\nphase_step = -0.5", "rainbow.phase_step=-0.5"},
+		{"空格言", `quotes = ["ok", "  "]`, "quotes[1]"},
 	}
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
@@ -217,10 +237,12 @@ func TestResolveWorkspaceEnvPriority(t *testing.T) {
 }
 
 func TestResolveUnconfigured(t *testing.T) {
-	// 把各类缓存目录都指到临时位置，避免读到本机真实配置。
+	// 把各类配置与缓存目录都指到临时位置，避免读到本机真实配置。
 	t.Setenv(workspaceEnv, "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 
 	// Windows 的 os.UserCacheDir 走 Known Folder API，不受环境变量影响，
